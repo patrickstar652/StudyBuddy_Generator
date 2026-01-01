@@ -73,3 +73,5 @@ pip-delete-this-directory.txt
 
 # Frontend specific
 .vite/
+
+PRESENTATION_OUTLINE.md

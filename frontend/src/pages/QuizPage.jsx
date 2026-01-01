@@ -8,6 +8,7 @@ import {
   RotateCcw,
   ChevronRight,
   Settings,
+  Sparkles,
 } from 'lucide-react';
 import toast from 'react-hot-toast';
 import LoadingSpinner, { LoadingButton } from '../components/LoadingSpinner';
@@ -38,7 +39,7 @@ function QuizPage() {
       setDocument(data.document);
     } catch (error) {
       console.error('Failed to fetch document:', error);
-      toast.error('無法載入文件');
+      toast.error('Failed to load document');
     } finally {
       setLoading(false);
     }
@@ -59,11 +60,11 @@ function QuizPage() {
         toast.error(result.quiz.error);
       } else {
         setQuiz(result.quiz);
-        toast.success('測驗生成成功！');
+        toast.success('Simulation ready');
       }
     } catch (error) {
       console.error('Failed to generate quiz:', error);
-      toast.error('生成測驗失敗');
+      toast.error('Simulation initialization failed');
     } finally {
       setGenerating(false);
     }
@@ -86,49 +87,50 @@ function QuizPage() {
   };
 
   if (loading) {
-    return <LoadingSpinner message="載入中..." />;
+    return <LoadingSpinner message="正在校準評估矩陣..." />;
   }
 
   const question = quiz?.questions?.[currentQuestion];
   const score = calculateScore();
 
   return (
-    <div className="space-y-8">
+    <div className="space-y-8 animate-fade-in">
       {/* Header */}
       <div>
         <Link
           to={`/document/${docId}`}
-          className="flex items-center gap-2 text-gray-500 hover:text-gray-700 mb-4"
+          className="flex items-center gap-2 text-slate-500 hover:text-cyan-600 dark:text-slate-400 dark:hover:text-cyan-400 mb-6 transition-colors"
         >
           <ArrowLeft className="h-4 w-4" />
           返回文件
         </Link>
         <div className="flex items-center justify-between">
-          <div className="flex items-center gap-4">
-            <div className="bg-blue-500 p-4 rounded-2xl">
-              <ClipboardList className="h-8 w-8 text-white" />
+          <div className="flex items-center gap-6">
+            <div className="bg-blue-100 dark:bg-blue-500/10 p-4 rounded-2xl border border-blue-200 dark:border-blue-500/20 animate-pulse shadow-sm dark:shadow-none">
+              <ClipboardList className="h-8 w-8 text-blue-600 dark:text-blue-400" />
             </div>
             <div>
-              <h1 className="text-2xl font-bold text-gray-900">隨堂考</h1>
-              <p className="text-gray-500">{document?.original_filename}</p>
+              <h1 className="text-3xl font-bold text-slate-900 dark:text-slate-100 mb-1">知識驗證</h1>
+              <p className="text-slate-600 dark:text-slate-500">{document?.original_filename}</p>
             </div>
           </div>
           <button
             onClick={() => setShowSettings(!showSettings)}
-            className="p-3 hover:bg-gray-100 rounded-xl transition-colors"
+            className="p-3 bg-white dark:bg-slate-800 hover:bg-slate-50 dark:hover:bg-slate-700 rounded-xl transition-colors border border-slate-200 dark:border-white/5 shadow-sm dark:shadow-none"
+            title="設定"
           >
-            <Settings className="h-5 w-5 text-gray-500" />
+            <Settings className="h-5 w-5 text-slate-500 dark:text-slate-400 hover:text-cyan-600 dark:hover:text-cyan-400 function-spin" />
           </button>
         </div>
       </div>
 
       {/* Settings Panel */}
       {showSettings && (
-        <div className="bg-white rounded-xl border border-gray-200 p-6">
-          <h3 className="font-semibold text-gray-900 mb-4">測驗設定</h3>
+        <div className="glass-card rounded-xl p-6 animate-scale-in border border-slate-200 dark:border-white/5">
+          <h3 className="font-bold text-slate-900 dark:text-slate-100 mb-4">模擬參數</h3>
           <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
             <div>
-              <label className="block text-sm font-medium text-gray-700 mb-2">
+              <label className="block text-sm font-medium text-slate-700 dark:text-slate-400 mb-2">
                 題目數量
               </label>
               <select
@@ -136,7 +138,7 @@ function QuizPage() {
                 onChange={(e) =>
                   setSettings({ ...settings, numQuestions: parseInt(e.target.value) })
                 }
-                className="w-full px-4 py-2 border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500"
+                className="w-full px-4 py-2 bg-white dark:bg-slate-900 border border-slate-300 dark:border-slate-700 rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500 text-slate-900 dark:text-slate-200"
               >
                 {[5, 6, 7, 8, 9, 10].map((n) => (
                   <option key={n} value={n}>
@@ -146,7 +148,7 @@ function QuizPage() {
               </select>
             </div>
             <div>
-              <label className="block text-sm font-medium text-gray-700 mb-2">
+              <label className="block text-sm font-medium text-slate-700 dark:text-slate-400 mb-2">
                 題目類型
               </label>
               <select
@@ -154,11 +156,11 @@ function QuizPage() {
                 onChange={(e) =>
                   setSettings({ ...settings, questionType: e.target.value })
                 }
-                className="w-full px-4 py-2 border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500"
+                className="w-full px-4 py-2 bg-white dark:bg-slate-900 border border-slate-300 dark:border-slate-700 rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500 text-slate-900 dark:text-slate-200"
               >
-                <option value="mixed">混合題型</option>
-                <option value="multiple_choice">只有選擇題</option>
-                <option value="short_answer">只有簡答題</option>
+                <option value="mixed">混合模式</option>
+                <option value="multiple_choice">僅選擇題</option>
+                <option value="short_answer">僅簡答題</option>
               </select>
             </div>
           </div>
@@ -167,40 +169,41 @@ function QuizPage() {
 
       {/* Generate Button */}
       {!quiz && (
-        <div className="bg-white rounded-2xl border border-gray-200 p-12 text-center">
-          <ClipboardList className="h-16 w-16 text-blue-200 mx-auto mb-6" />
-          <h2 className="text-xl font-semibold text-gray-900 mb-2">
-            準備好測試自己了嗎？
+        <div className="glass-card rounded-2xl p-12 text-center border-dashed border-2 border-slate-300 dark:border-slate-700 animate-scale-in">
+          <ClipboardList className="h-16 w-16 text-blue-600 dark:text-blue-400 mx-auto mb-6 animate-float" />
+          <h2 className="text-2xl font-bold text-slate-900 dark:text-slate-100 mb-3">
+            啟動技能驗證
           </h2>
-          <p className="text-gray-500 mb-6">
-            AI 將根據文件內容生成 {settings.numQuestions} 道測驗題目
+          <p className="text-slate-600 dark:text-slate-400 mb-8">
+            AI 將根據攝入的數據生成 {settings.numQuestions} 個問題。
           </p>
           <LoadingButton
             onClick={generateQuiz}
             loading={generating}
-            className="px-8 py-4 bg-gradient-to-r from-blue-600 to-purple-600 text-white font-medium rounded-xl hover:from-blue-700 hover:to-purple-700 transition-all shadow-lg"
+            className="px-8 py-4 bg-gradient-to-r from-blue-600 to-indigo-600 text-white font-bold rounded-xl hover:shadow-[0_0_20px_rgba(37,99,235,0.3)] transition-all relative overflow-hidden group"
           >
-            生成測驗 ✨
+            <span className="relative z-10">開始測驗</span>
+            <div className="absolute inset-0 bg-white/20 translate-y-full group-hover:translate-y-0 transition-transform duration-300" />
           </LoadingButton>
         </div>
       )}
 
       {/* Quiz Content */}
       {quiz && !showResults && question && (
-        <div className="bg-white rounded-2xl border border-gray-200 p-8">
+        <div className="glass-card rounded-2xl p-8 animate-fade-in-up border border-slate-200 dark:border-white/5">
           {/* Progress */}
           <div className="mb-8">
             <div className="flex items-center justify-between mb-2">
-              <span className="text-sm text-gray-500">
-                題目 {currentQuestion + 1} / {quiz.questions.length}
+              <span className="text-sm text-slate-600 dark:text-slate-400 font-mono">
+                問題 <span className="text-blue-600 dark:text-blue-400 font-bold">{currentQuestion + 1}</span> / {quiz.questions.length}
               </span>
-              <span className="text-sm text-gray-500">
-                已作答 {Object.keys(answers).length} 題
+              <span className="text-sm text-slate-600 dark:text-slate-500">
+                已完成：{Object.keys(answers).length}
               </span>
             </div>
-            <div className="h-2 bg-gray-200 rounded-full overflow-hidden">
+            <div className="h-2 bg-slate-200 dark:bg-slate-800 rounded-full overflow-hidden">
               <div
-                className="h-full bg-blue-600 rounded-full transition-all duration-300"
+                className="h-full bg-blue-500 rounded-full transition-all duration-300 shadow-[0_0_10px_rgba(59,130,246,0.5)]"
                 style={{
                   width: `${((currentQuestion + 1) / quiz.questions.length) * 100}%`,
                 }}
@@ -209,24 +212,24 @@ function QuizPage() {
           </div>
 
           {/* Question */}
-          <div className="mb-8">
+          <div className="mb-8 p-6 bg-slate-50 dark:bg-slate-900/50 rounded-xl border border-slate-200 dark:border-white/5 animate-fade-in">
             <span
-              className={`inline-block px-3 py-1 rounded-full text-sm font-medium mb-4 ${
+              className={`inline-block px-3 py-1 rounded-full text-xs font-bold uppercase tracking-wider mb-4 border ${
                 question.type === 'multiple_choice'
-                  ? 'bg-blue-100 text-blue-700'
-                  : 'bg-purple-100 text-purple-700'
+                  ? 'bg-blue-100 dark:bg-blue-500/10 text-blue-700 dark:text-blue-400 border-blue-200 dark:border-blue-500/20'
+                  : 'bg-purple-100 dark:bg-purple-500/10 text-purple-700 dark:text-purple-400 border-purple-200 dark:border-purple-500/20'
               }`}
             >
               {question.type === 'multiple_choice' ? '選擇題' : '簡答題'}
             </span>
-            <h2 className="text-xl font-semibold text-gray-900">
+            <h2 className="text-xl font-bold text-slate-900 dark:text-slate-100 leading-relaxed">
               {question.question}
             </h2>
           </div>
 
           {/* Options */}
           {question.type === 'multiple_choice' ? (
-            <div className="space-y-3 mb-8">
+            <div className="space-y-4 mb-8">
               {question.options.map((option, idx) => {
                 const optionLetter = option.charAt(0);
                 const isSelected = answers[question.id] === optionLetter;
@@ -234,41 +237,52 @@ function QuizPage() {
                   <button
                     key={idx}
                     onClick={() => handleAnswer(question.id, optionLetter)}
-                    className={`w-full text-left p-4 rounded-xl border-2 transition-all quiz-option ${
+                    className={`w-full text-left p-5 rounded-xl border transition-all duration-200 group relative overflow-hidden animate-fade-in-up ${
                       isSelected
-                        ? 'border-blue-500 bg-blue-50'
-                        : 'border-gray-200 hover:border-blue-300 hover:bg-gray-50'
+                        ? 'border-blue-500 bg-blue-50 dark:bg-blue-900/20 shadow-md dark:shadow-[0_0_15px_rgba(59,130,246,0.1)]'
+                        : 'border-slate-200 dark:border-slate-700 bg-white dark:bg-slate-900/40 hover:border-blue-400 hover:bg-slate-50 dark:hover:bg-slate-800'
                     }`}
+                    style={{ animationDelay: `${idx * 100}ms` }}
                   >
-                    <span className="font-medium">{option}</span>
+                    <div className={`absolute inset-0 bg-blue-500/5 opacity-0 group-hover:opacity-100 transition-opacity ${isSelected ? 'opacity-100' : ''}`} />
+                    <div className="relative flex items-center gap-4">
+                      <div className={`w-8 h-8 rounded-full flex items-center justify-center font-bold font-mono transition-colors ${
+                        isSelected ? 'bg-blue-500 text-white' : 'bg-slate-100 dark:bg-slate-800 text-slate-500 dark:text-slate-400 group-hover:bg-slate-200 dark:group-hover:bg-slate-700'
+                      }`}>
+                        {String.fromCharCode(65 + idx)}
+                      </div>
+                      <span className={`font-medium text-lg ${isSelected ? 'text-blue-700 dark:text-blue-100' : 'text-slate-700 dark:text-slate-300'}`}>
+                         {option.substring(2)}
+                      </span>
+                    </div>
                   </button>
                 );
               })}
             </div>
           ) : (
-            <div className="mb-8">
+            <div className="mb-8 animate-fade-in-up">
               <textarea
                 value={answers[question.id] || ''}
                 onChange={(e) => handleAnswer(question.id, e.target.value)}
-                placeholder="輸入你的答案..."
-                className="w-full h-32 px-4 py-3 border border-gray-300 rounded-xl focus:outline-none focus:ring-2 focus:ring-blue-500 resize-none"
+                placeholder="在此輸入您的分析..."
+                className="w-full h-40 px-6 py-4 bg-white dark:bg-slate-900/50 border border-slate-300 dark:border-slate-700 rounded-xl focus:outline-none focus:ring-2 focus:ring-purple-500 focus:border-transparent resize-none text-slate-900 dark:text-slate-200 placeholder-slate-400 dark:placeholder-slate-600 custom-scrollbar"
               />
             </div>
           )}
 
           {/* Navigation */}
-          <div className="flex items-center justify-between">
+          <div className="flex items-center justify-between pt-4 border-t border-slate-200 dark:border-white/5">
             <button
               onClick={() => setCurrentQuestion(Math.max(0, currentQuestion - 1))}
               disabled={currentQuestion === 0}
-              className="px-4 py-2 text-gray-600 hover:bg-gray-100 rounded-lg disabled:opacity-50 disabled:cursor-not-allowed"
+              className="px-6 py-3 text-slate-500 dark:text-slate-400 hover:text-slate-900 dark:hover:text-white rounded-xl disabled:opacity-50 disabled:cursor-not-allowed transition-colors"
             >
               上一題
             </button>
             {currentQuestion < quiz.questions.length - 1 ? (
               <button
                 onClick={() => setCurrentQuestion(currentQuestion + 1)}
-                className="px-6 py-2 bg-blue-600 text-white rounded-lg hover:bg-blue-700 flex items-center gap-2"
+                className="px-8 py-3 bg-slate-900 dark:bg-slate-800 hover:bg-slate-700 text-white font-bold rounded-xl flex items-center gap-2 transition-all hover:scale-105"
               >
                 下一題
                 <ChevronRight className="h-4 w-4" />
@@ -276,9 +290,9 @@ function QuizPage() {
             ) : (
               <button
                 onClick={() => setShowResults(true)}
-                className="px-6 py-2 bg-green-600 text-white rounded-lg hover:bg-green-700"
+                className="px-8 py-3 bg-green-600 hover:bg-green-500 text-white font-bold rounded-xl transition-all hover:scale-105 shadow-[0_0_20px_rgba(22,163,74,0.4)]"
               >
-                提交測驗
+                完成驗證
               </button>
             )}
           </div>
@@ -287,15 +301,17 @@ function QuizPage() {
 
       {/* Results */}
       {quiz && showResults && (
-        <div className="space-y-6">
+        <div className="space-y-6 animate-fade-in-up">
           {/* Score Summary */}
-          <div className="bg-white rounded-2xl border border-gray-200 p-8 text-center">
-            <div className="mb-6">
-              <div className="text-6xl font-bold bg-gradient-to-r from-blue-600 to-purple-600 bg-clip-text text-transparent">
+          <div className="glass-card rounded-2xl p-12 text-center relative overflow-hidden animate-scale-in border border-slate-200 dark:border-white/5">
+             <div className="absolute inset-0 bg-blue-500/5" />
+            <div className="relative z-10 mb-8">
+              <h2 className="text-2xl font-bold text-slate-900 dark:text-slate-100 mb-6">評估完成</h2>
+              <div className="text-8xl font-black bg-gradient-to-r from-blue-600 via-purple-600 to-pink-600 dark:from-blue-400 dark:via-purple-400 dark:to-pink-400 bg-clip-text text-transparent p-4 drop-shadow-2xl animate-pulse">
                 {Math.round((score.correct / score.total) * 100)}%
               </div>
-              <p className="text-gray-500 mt-2">
-                答對 {score.correct} / {score.total} 題
+              <p className="text-xl text-slate-600 dark:text-slate-400 mt-4">
+                準確率： <span className="text-slate-900 dark:text-white font-bold">{score.correct}</span> / {score.total} 正確
               </p>
             </div>
             <button
@@ -304,16 +320,16 @@ function QuizPage() {
                 setAnswers({});
                 setShowResults(false);
               }}
-              className="px-6 py-3 bg-blue-600 text-white rounded-xl hover:bg-blue-700 flex items-center gap-2 mx-auto"
+              className="relative z-10 px-8 py-4 bg-slate-900 dark:bg-slate-800 hover:bg-slate-700 text-white font-bold rounded-xl flex items-center gap-3 mx-auto transition-all hover:scale-105 border border-white/5"
             >
-              <RotateCcw className="h-4 w-4" />
-              重新測驗
+              <RotateCcw className="h-5 w-5" />
+              重置模擬
             </button>
           </div>
 
           {/* Detailed Results */}
-          <div className="bg-white rounded-2xl border border-gray-200 p-8">
-            <h3 className="text-xl font-bold text-gray-900 mb-6">詳細結果</h3>
+          <div className="glass-card rounded-2xl p-8 animate-fade-in-up delay-200 border border-slate-200 dark:border-white/5">
+            <h3 className="text-xl font-bold text-slate-900 dark:text-slate-100 mb-8">分析矩陣</h3>
             <div className="space-y-6">
               {quiz.questions.map((q, idx) => {
                 const userAnswer = answers[q.id];
@@ -323,60 +339,68 @@ function QuizPage() {
                 return (
                   <div
                     key={q.id}
-                    className={`p-6 rounded-xl border-2 ${
+                    className={`p-6 rounded-xl border border-l-4 transition-all duration-300 hover:scale-[1.01] ${
                       q.type === 'multiple_choice'
                         ? isCorrect
-                          ? 'border-green-200 bg-green-50'
-                          : 'border-red-200 bg-red-50'
-                        : 'border-gray-200 bg-gray-50'
+                          ? 'border-green-500/30 border-l-green-500 bg-green-50 dark:bg-green-500/5'
+                          : 'border-red-500/30 border-l-red-500 bg-red-50 dark:bg-red-500/5'
+                        : 'border-slate-200 dark:border-slate-700 border-l-blue-500 bg-white dark:bg-slate-900/50'
                     }`}
                   >
-                    <div className="flex items-start gap-3 mb-4">
+                    <div className="flex items-start gap-4">
                       {q.type === 'multiple_choice' ? (
                         isCorrect ? (
-                          <CheckCircle className="h-6 w-6 text-green-500 flex-shrink-0" />
+                          <div className="p-2 bg-green-100 dark:bg-green-500/20 rounded-full flex-shrink-0 animate-scale-in">
+                             <CheckCircle className="h-6 w-6 text-green-600 dark:text-green-400" />
+                          </div>
                         ) : (
-                          <XCircle className="h-6 w-6 text-red-500 flex-shrink-0" />
+                          <div className="p-2 bg-red-100 dark:bg-red-500/20 rounded-full flex-shrink-0 animate-scale-in">
+                             <XCircle className="h-6 w-6 text-red-600 dark:text-red-400" />
+                          </div>
                         )
                       ) : (
-                        <div className="h-6 w-6 flex-shrink-0" />
+                        <div className="p-2 bg-blue-100 dark:bg-blue-500/20 rounded-full flex-shrink-0">
+                           <div className="h-6 w-6 rounded-full border-2 border-blue-500 dark:border-blue-400" />
+                        </div>
                       )}
                       <div className="flex-1">
-                        <p className="font-medium text-gray-900">
-                          {idx + 1}. {q.question}
+                        <p className="font-bold text-lg text-slate-800 dark:text-slate-200 mb-4">
+                          <span className="text-slate-500 mr-2">{idx + 1}.</span>
+                          {q.question}
                         </p>
                         {q.type === 'multiple_choice' && (
-                          <div className="mt-3 space-y-2">
-                            <p className="text-sm">
-                              <span className="text-gray-500">你的答案：</span>{' '}
-                              <span className={isCorrect ? 'text-green-600' : 'text-red-600'}>
-                                {userAnswer || '未作答'}
+                          <div className="space-y-3 bg-white dark:bg-slate-950/30 p-4 rounded-xl border border-slate-200 dark:border-white/5">
+                            <p className="text-sm flex items-center justify-between">
+                              <span className="text-slate-600 dark:text-slate-400">您的答案：</span>
+                              <span className={`font-mono font-bold px-2 py-1 rounded ${isCorrect ? 'bg-green-100 dark:bg-green-500/20 text-green-700 dark:text-green-400' : 'bg-red-100 dark:bg-red-500/20 text-red-700 dark:text-red-400'}`}>
+                                {userAnswer || 'N/A'}
                               </span>
                             </p>
                             {!isCorrect && (
-                              <p className="text-sm">
-                                <span className="text-gray-500">正確答案：</span>{' '}
-                                <span className="text-green-600">{q.correct_answer}</span>
+                              <p className="text-sm flex items-center justify-between border-t border-slate-200 dark:border-white/5 pt-2">
+                                <span className="text-slate-600 dark:text-slate-400">最佳答案：</span>
+                                <span className="font-mono font-bold text-green-700 dark:text-green-400 bg-green-100 dark:bg-green-500/10 px-2 py-1 rounded">{q.correct_answer}</span>
                               </p>
                             )}
                           </div>
                         )}
                         {q.type === 'short_answer' && (
-                          <div className="mt-3 space-y-2">
-                            <p className="text-sm">
-                              <span className="text-gray-500">你的答案：</span>{' '}
-                              {userAnswer || '未作答'}
-                            </p>
-                            <p className="text-sm">
-                              <span className="text-gray-500">參考答案：</span>{' '}
-                              {q.expected_answer}
-                            </p>
+                          <div className="space-y-4 bg-white dark:bg-slate-950/30 p-4 rounded-xl border border-slate-200 dark:border-white/5 mt-4">
+                            <div>
+                              <p className="text-xs text-slate-500 uppercase tracking-widest mb-2">您的輸出</p>
+                              <p className="text-slate-700 dark:text-slate-300 italic">{userAnswer || '無數據'}</p>
+                            </div>
+                            <div className="border-t border-slate-200 dark:border-white/5 pt-4">
+                               <p className="text-xs text-slate-500 uppercase tracking-widest mb-2">參考輸出</p>
+                               <p className="text-green-700 dark:text-green-300/80">{q.expected_answer}</p>
+                            </div>
                           </div>
                         )}
                         {q.explanation && (
-                          <div className="mt-3 p-3 bg-white rounded-lg">
-                            <p className="text-sm text-gray-600">
-                              <span className="font-medium">解釋：</span> {q.explanation}
+                          <div className="mt-4 p-4 bg-blue-50 dark:bg-blue-500/5 rounded-xl border border-blue-200 dark:border-blue-500/20">
+                            <p className="text-sm text-blue-800 dark:text-blue-200">
+                              <span className="font-bold text-blue-600 dark:text-blue-400 mr-2 uppercase text-xs tracking-wider">分析：</span> 
+                              {q.explanation}
                             </p>
                           </div>
                         )}
