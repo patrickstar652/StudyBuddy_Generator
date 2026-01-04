@@ -74,4 +74,15 @@ pip-delete-this-directory.txt
 # Frontend specific
 .vite/
 
+# Documentation files (not tracked)
+ARCHITECTURE.md
+UPLOAD_FLOW.md
+PROJECT_OVERVIEW.md
+QUICKSTART.md
 PRESENTATION_OUTLINE.md
+
+# PowerShell scripts
+start.ps1
+
+# Uploads folder
+backend/uploads/

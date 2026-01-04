@@ -66,28 +66,9 @@
 - ✅ 降低 API 成本
 - ✅ 加快處理速度
 
-詳細說明請參考 [UPLOAD_FLOW.md](UPLOAD_FLOW.md)
-
 ## 📦 安裝步驟
 
-### 方法 1: 自動安裝（推薦）⚡
-
-使用我們提供的啟動腳本，一鍵完成所有設定：
-
-```powershell
-# 在專案根目錄執行
-.\start.ps1
-```
-
-這個腳本會自動：
-- ✅ 檢查 Python 和 Node.js
-- ✅ 建立虛擬環境
-- ✅ 安裝所有依賴
-- ✅ 設定 API Key
-- ✅ 啟動前後端服務
-- ✅ 打開瀏覽器
-
-### 方法 2: 手動安裝
+### 手動安裝
 
 #### 1. 克隆專案
 
@@ -334,10 +315,3 @@ study_buddy/
 - `POST /api/study/ask/:docId` - 問答
 - `POST /api/study/search/:docId` - 搜索文件內容
 
-## 🤝 貢獻
-
-歡迎提交 Issue 和 Pull Request！
-
-## 📜 授權
-
-MIT License
