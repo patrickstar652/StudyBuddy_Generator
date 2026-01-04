@@ -3,11 +3,17 @@
 處理測驗生成、閃卡生成、摘要生成等功能
 """
 
+import os
+import uuid
 from flask import Blueprint, request, jsonify
 
 from services import get_groq_service, get_rag_service
+from config import get_supabase
 
 study_tools_bp = Blueprint('study_tools', __name__)
+
+# 是否使用 Supabase
+USE_SUPABASE = os.getenv('SUPABASE_URL') and os.getenv('SUPABASE_KEY')
 
 
 @study_tools_bp.route('/quiz/<doc_id>', methods=['POST'])
@@ -42,9 +48,26 @@ def generate_quiz(doc_id: str):
         groq_service = get_groq_service()
         quiz = groq_service.generate_quiz(content, num_questions, question_type)
         
+        # 存入 Supabase（如果已配置）
+        quiz_id = str(uuid.uuid4())
+        if USE_SUPABASE:
+            try:
+                supabase = get_supabase()
+                supabase.save_quiz({
+                    'id': quiz_id,
+                    'document_id': doc_id,
+                    'title': quiz.get('quiz_title', '自動生成測驗'),
+                    'questions': quiz.get('questions', []),
+                    'settings': {'num_questions': num_questions, 'question_type': question_type}
+                })
+            except Exception as e:
+                print(f"Failed to save quiz to Supabase: {e}")
+        
         return jsonify({
             'document_id': doc_id,
-            'quiz': quiz
+            'quiz_id': quiz_id,
+            'quiz': quiz,
+            'saved_to_supabase': USE_SUPABASE
         })
         
     except Exception as e:
@@ -81,9 +104,25 @@ def generate_flashcards(doc_id: str):
         groq_service = get_groq_service()
         flashcards = groq_service.generate_flashcards(content, num_cards)
         
+        # 存入 Supabase（如果已配置）
+        flashcard_id = str(uuid.uuid4())
+        if USE_SUPABASE:
+            try:
+                supabase = get_supabase()
+                supabase.save_flashcards({
+                    'id': flashcard_id,
+                    'document_id': doc_id,
+                    'deck_title': flashcards.get('deck_title', '自動生成閃卡'),
+                    'cards': flashcards.get('cards', [])
+                })
+            except Exception as e:
+                print(f"Failed to save flashcards to Supabase: {e}")
+        
         return jsonify({
             'document_id': doc_id,
-            'flashcards': flashcards
+            'flashcard_id': flashcard_id,
+            'flashcards': flashcards,
+            'saved_to_supabase': USE_SUPABASE
         })
         
     except Exception as e:
@@ -120,9 +159,27 @@ def generate_summary(doc_id: str):
         groq_service = get_groq_service()
         summary = groq_service.generate_summary(content, num_points)
         
+        # 存入 Supabase（如果已配置）
+        summary_id = str(uuid.uuid4())
+        if USE_SUPABASE:
+            try:
+                supabase = get_supabase()
+                supabase.client.table('summaries').insert({
+                    'id': summary_id,
+                    'document_id': doc_id,
+                    'document_title': summary.get('document_title', ''),
+                    'tldr': summary.get('tldr', ''),
+                    'key_points': summary.get('key_points', []),
+                    'keywords': summary.get('keywords', [])
+                }).execute()
+            except Exception as e:
+                print(f"Failed to save summary to Supabase: {e}")
+        
         return jsonify({
             'document_id': doc_id,
-            'summary': summary
+            'summary_id': summary_id,
+            'summary': summary,
+            'saved_to_supabase': USE_SUPABASE
         })
         
     except Exception as e:
@@ -211,4 +268,72 @@ def search_document(doc_id: str):
         })
         
     except Exception as e:
+        return jsonify({'error': str(e)}), 500
+
+
+# ============ 歷史記錄 API ============
+
+@study_tools_bp.route('/flashcards/<doc_id>', methods=['GET'])
+def get_flashcards_history(doc_id: str):
+    """
+    獲取文件的閃卡歷史記錄
+    """
+    try:
+        if not USE_SUPABASE:
+            return jsonify({'flashcards': [], 'message': 'Supabase not configured'}), 200
+        
+        supabase = get_supabase()
+        result = supabase.get_flashcards(doc_id)
+        
+        return jsonify({
+            'document_id': doc_id,
+            'flashcards': result.data if result.data else []
+        })
+        
+    except Exception as e:
+        print(f"Failed to get flashcards history: {e}")
+        return jsonify({'error': str(e)}), 500
+
+
+@study_tools_bp.route('/quizzes/<doc_id>', methods=['GET'])
+def get_quizzes_history(doc_id: str):
+    """
+    獲取文件的測驗歷史記錄
+    """
+    try:
+        if not USE_SUPABASE:
+            return jsonify({'quizzes': [], 'message': 'Supabase not configured'}), 200
+        
+        supabase = get_supabase()
+        result = supabase.get_quizzes(doc_id)
+        
+        return jsonify({
+            'document_id': doc_id,
+            'quizzes': result.data if result.data else []
+        })
+        
+    except Exception as e:
+        print(f"Failed to get quizzes history: {e}")
+        return jsonify({'error': str(e)}), 500
+
+
+@study_tools_bp.route('/summaries/<doc_id>', methods=['GET'])
+def get_summaries_history(doc_id: str):
+    """
+    獲取文件的摘要歷史記錄
+    """
+    try:
+        if not USE_SUPABASE:
+            return jsonify({'summaries': [], 'message': 'Supabase not configured'}), 200
+        
+        supabase = get_supabase()
+        result = supabase.client.table('summaries').select('*').eq('document_id', doc_id).order('created_at', desc=True).execute()
+        
+        return jsonify({
+            'document_id': doc_id,
+            'summaries': result.data if result.data else []
+        })
+        
+    except Exception as e:
+        print(f"Failed to get summaries history: {e}")
         return jsonify({'error': str(e)}), 500

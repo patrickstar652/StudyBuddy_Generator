@@ -6,9 +6,13 @@ import {
   AlertCircle,
   ChevronDown,
   ChevronUp,
+  ChevronRight,
   Tag,
   RotateCcw,
   Sparkles,
+  History,
+  Clock,
+  Plus,
 } from 'lucide-react';
 import toast from 'react-hot-toast';
 import LoadingSpinner, { LoadingButton } from '../components/LoadingSpinner';
@@ -18,13 +22,16 @@ function SummaryPage() {
   const { docId } = useParams();
   const [document, setDocument] = useState(null);
   const [summary, setSummary] = useState(null);
+  const [history, setHistory] = useState([]);
   const [loading, setLoading] = useState(true);
   const [generating, setGenerating] = useState(false);
   const [expandedPoints, setExpandedPoints] = useState({});
   const [numPoints, setNumPoints] = useState(5);
+  const [showHistory, setShowHistory] = useState(false);
 
   useEffect(() => {
     fetchDocument();
+    fetchHistory();
   }, [docId]);
 
   const fetchDocument = async () => {
@@ -39,6 +46,37 @@ function SummaryPage() {
     }
   };
 
+  const fetchHistory = async () => {
+    try {
+      const data = await studyApi.getSummaries(docId);
+      setHistory(data.summaries || []);
+      // 如果有歷史記錄，自動載入最新的一筆
+      if (data.summaries && data.summaries.length > 0) {
+        const latest = data.summaries[0];
+        setSummary({
+          document_title: latest.document_title,
+          tldr: latest.tldr,
+          key_points: latest.key_points,
+          keywords: latest.keywords,
+        });
+      }
+    } catch (error) {
+      console.error('Failed to fetch summary history:', error);
+    }
+  };
+
+  const loadFromHistory = (item) => {
+    setSummary({
+      document_title: item.document_title,
+      tldr: item.tldr,
+      key_points: item.key_points,
+      keywords: item.keywords,
+    });
+    setExpandedPoints({});
+    setShowHistory(false);
+    toast.success('已載入歷史摘要');
+  };
+
   const generateSummary = async () => {
     setGenerating(true);
     setSummary(null);
@@ -49,6 +87,8 @@ function SummaryPage() {
       } else {
         setSummary(result.summary);
         toast.success('Summary compiled successfully');
+        // 重新載入歷史
+        fetchHistory();
       }
     } catch (error) {
       console.error('Failed to generate summary:', error);
@@ -78,6 +118,17 @@ function SummaryPage() {
     }
   };
 
+  const formatDate = (dateString) => {
+    const date = new Date(dateString);
+    return date.toLocaleDateString('zh-TW', {
+      year: 'numeric',
+      month: 'short',
+      day: 'numeric',
+      hour: '2-digit',
+      minute: '2-digit',
+    });
+  };
+
   if (loading) {
     return <LoadingSpinner message="正在掃描數據模式..." />;
   }
@@ -93,21 +144,65 @@ function SummaryPage() {
           <ArrowLeft className="h-4 w-4" />
           返回文件
         </Link>
-        <div className="flex items-center gap-6">
-          <div className="bg-green-100 dark:bg-green-500/10 p-4 rounded-2xl border border-green-200 dark:border-green-500/20 animate-pulse shadow-sm dark:shadow-none">
-            <FileSearch className="h-8 w-8 text-green-600 dark:text-green-400" />
+        <div className="flex items-center justify-between">
+          <div className="flex items-center gap-6">
+            <div className="bg-green-100 dark:bg-green-500/10 p-4 rounded-2xl border border-green-200 dark:border-green-500/20 animate-pulse shadow-sm dark:shadow-none">
+              <FileSearch className="h-8 w-8 text-green-600 dark:text-green-400" />
+            </div>
+            <div>
+              <h1 className="text-3xl font-bold text-slate-900 dark:text-slate-100 flex items-center gap-3">
+                重點摘要 <span className="text-xs bg-green-100 dark:bg-green-500/20 text-green-700 dark:text-green-400 px-2 py-1 rounded-full border border-green-200 dark:border-green-500/20">TL;DR</span>
+              </h1>
+              <p className="text-slate-600 dark:text-slate-500 mt-1">{document?.original_filename}</p>
+            </div>
           </div>
-          <div>
-            <h1 className="text-3xl font-bold text-slate-900 dark:text-slate-100 flex items-center gap-3">
-              重點摘要 <span className="text-xs bg-green-100 dark:bg-green-500/20 text-green-700 dark:text-green-400 px-2 py-1 rounded-full border border-green-200 dark:border-green-500/20">TL;DR</span>
-            </h1>
-            <p className="text-slate-600 dark:text-slate-500 mt-1">{document?.original_filename}</p>
-          </div>
+          {history.length > 0 && (
+            <button
+              onClick={() => setShowHistory(!showHistory)}
+              className={`flex items-center gap-2 px-4 py-2 rounded-xl transition-all ${
+                showHistory
+                  ? 'bg-green-100 dark:bg-green-500/20 text-green-700 dark:text-green-300'
+                  : 'bg-white dark:bg-slate-800 text-slate-600 dark:text-slate-400 hover:bg-slate-50 dark:hover:bg-slate-700'
+              } border border-slate-200 dark:border-slate-700`}
+            >
+              <History className="h-4 w-4" />
+              歷史記錄 ({history.length})
+            </button>
+          )}
         </div>
       </div>
 
+      {/* History Panel */}
+      {showHistory && history.length > 0 && (
+        <div className="glass-card rounded-2xl p-6 border border-green-200 dark:border-green-500/20 animate-fade-in">
+          <h3 className="font-bold text-slate-900 dark:text-slate-100 mb-4 flex items-center gap-2">
+            <Clock className="h-5 w-5 text-green-500" />
+            摘要歷史記錄
+          </h3>
+          <div className="grid gap-3">
+            {history.map((item) => (
+              <button
+                key={item.id}
+                onClick={() => loadFromHistory(item)}
+                className="flex items-center justify-between p-4 bg-white dark:bg-slate-900/50 rounded-xl border border-slate-200 dark:border-white/5 hover:border-green-300 dark:hover:border-green-500/30 hover:bg-green-50 dark:hover:bg-green-500/5 transition-all text-left"
+              >
+                <div>
+                  <p className="font-medium text-slate-900 dark:text-slate-100">
+                    {item.document_title || '摘要'}
+                  </p>
+                  <p className="text-sm text-slate-500 dark:text-slate-400">
+                    {item.key_points?.length || 0} 個重點 · {formatDate(item.created_at)}
+                  </p>
+                </div>
+                <ChevronRight className="h-5 w-5 text-slate-400" />
+              </button>
+            ))}
+          </div>
+        </div>
+      )}
+
       {/* Generate Section */}
-      {!summary && (
+      {!summary && !generating && (
         <div className="glass-card rounded-2xl p-12 text-center border-dashed border-2 border-slate-300 dark:border-slate-700 animate-scale-in">
           <div className="bg-green-100 dark:bg-green-500/10 w-20 h-20 rounded-full flex items-center justify-center mx-auto mb-6 animate-float">
             <Sparkles className="h-10 w-10 text-green-600 dark:text-green-400" />
@@ -150,9 +245,18 @@ function SummaryPage() {
           <div className="relative overflow-hidden rounded-2xl p-8 animate-scale-in shadow-lg">
             <div className="absolute inset-0 bg-gradient-to-br from-green-600 to-teal-800 opacity-90" />
             <div className="relative z-10">
-              <div className="flex items-start gap-3 mb-4">
-                <AlertCircle className="h-6 w-6 text-green-100 flex-shrink-0" />
-                <h2 className="text-xl font-bold text-white">執行摘要 (TL;DR)</h2>
+              <div className="flex items-start justify-between mb-4">
+                <div className="flex items-start gap-3">
+                  <AlertCircle className="h-6 w-6 text-green-100 flex-shrink-0" />
+                  <h2 className="text-xl font-bold text-white">執行摘要 (TL;DR)</h2>
+                </div>
+                <button
+                  onClick={() => setSummary(null)}
+                  className="p-2 hover:bg-white/10 rounded-lg transition-colors text-green-100 hover:text-white"
+                  title="生成新摘要"
+                >
+                  <Plus className="h-5 w-5" />
+                </button>
               </div>
               <p className="text-lg leading-relaxed text-green-50 text-shadow-sm">{summary.tldr}</p>
             </div>

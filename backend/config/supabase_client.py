@@ -11,12 +11,17 @@ load_dotenv()
 
 class SupabaseClient:
     _instance = None
+    _initialized = False
     
     def __new__(cls):
         if cls._instance is None:
             cls._instance = super().__new__(cls)
-            cls._instance._initialize()
         return cls._instance
+    
+    def __init__(self):
+        if not SupabaseClient._initialized:
+            self._initialize()
+            SupabaseClient._initialized = True
     
     def _initialize(self):
         url = os.getenv("SUPABASE_URL")
@@ -84,16 +89,16 @@ class SupabaseClient:
         return self.client.table('quizzes').insert(quiz_data).execute()
     
     def get_quizzes(self, doc_id: str):
-        """獲取文件的所有測驗"""
-        return self.client.table('quizzes').select('*').eq('document_id', doc_id).execute()
+        """獲取文件的所有測驗（按時間倒序）"""
+        return self.client.table('quizzes').select('*').eq('document_id', doc_id).order('created_at', desc=True).execute()
     
     def save_flashcards(self, flashcard_data: dict):
         """保存閃卡"""
         return self.client.table('flashcards').insert(flashcard_data).execute()
     
     def get_flashcards(self, doc_id: str):
-        """獲取文件的所有閃卡"""
-        return self.client.table('flashcards').select('*').eq('document_id', doc_id).execute()
+        """獲取文件的所有閃卡（按時間倒序）"""
+        return self.client.table('flashcards').select('*').eq('document_id', doc_id).order('created_at', desc=True).execute()
 
 
 def get_supabase() -> SupabaseClient:

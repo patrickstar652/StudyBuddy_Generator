@@ -9,6 +9,9 @@ import {
   Shuffle,
   Tag,
   Sparkles,
+  History,
+  Clock,
+  Plus,
 } from 'lucide-react';
 import toast from 'react-hot-toast';
 import LoadingSpinner, { LoadingButton } from '../components/LoadingSpinner';
@@ -18,14 +21,17 @@ function FlashcardsPage() {
   const { docId } = useParams();
   const [document, setDocument] = useState(null);
   const [flashcards, setFlashcards] = useState(null);
+  const [history, setHistory] = useState([]);
   const [loading, setLoading] = useState(true);
   const [generating, setGenerating] = useState(false);
   const [currentCard, setCurrentCard] = useState(0);
   const [isFlipped, setIsFlipped] = useState(false);
   const [numCards, setNumCards] = useState(10);
+  const [showHistory, setShowHistory] = useState(false);
 
   useEffect(() => {
     fetchDocument();
+    fetchHistory();
   }, [docId]);
 
   const fetchDocument = async () => {
@@ -40,6 +46,34 @@ function FlashcardsPage() {
     }
   };
 
+  const fetchHistory = async () => {
+    try {
+      const data = await studyApi.getFlashcards(docId);
+      setHistory(data.flashcards || []);
+      // 如果有歷史記錄，自動載入最新的一筆
+      if (data.flashcards && data.flashcards.length > 0) {
+        const latest = data.flashcards[0];
+        setFlashcards({
+          deck_title: latest.deck_title,
+          cards: latest.cards,
+        });
+      }
+    } catch (error) {
+      console.error('Failed to fetch flashcards history:', error);
+    }
+  };
+
+  const loadFromHistory = (item) => {
+    setFlashcards({
+      deck_title: item.deck_title,
+      cards: item.cards,
+    });
+    setCurrentCard(0);
+    setIsFlipped(false);
+    setShowHistory(false);
+    toast.success('已載入歷史閃卡');
+  };
+
   const generateFlashcards = async () => {
     setGenerating(true);
     setFlashcards(null);
@@ -52,6 +86,8 @@ function FlashcardsPage() {
       } else {
         setFlashcards(result.flashcards);
         toast.success('Flashcards generated successfully');
+        // 重新載入歷史
+        fetchHistory();
       }
     } catch (error) {
       console.error('Failed to generate flashcards:', error);
@@ -95,6 +131,17 @@ function FlashcardsPage() {
     return () => window.removeEventListener('keydown', handleKeyPress);
   }, [isFlipped, flashcards, currentCard]);
 
+  const formatDate = (dateString) => {
+    const date = new Date(dateString);
+    return date.toLocaleDateString('zh-TW', {
+      year: 'numeric',
+      month: 'short',
+      day: 'numeric',
+      hour: '2-digit',
+      minute: '2-digit',
+    });
+  };
+
   if (loading) {
     return <LoadingSpinner message="正在加載神經牌組..." />;
   }
@@ -112,21 +159,65 @@ function FlashcardsPage() {
           <ArrowLeft className="h-4 w-4" />
           返回文件
         </Link>
-        <div className="flex items-center gap-6">
-          <div className="bg-purple-100 dark:bg-purple-500/10 p-4 rounded-2xl border border-purple-200 dark:border-purple-500/20 animate-pulse shadow-sm dark:shadow-none">
-            <Layers className="h-8 w-8 text-purple-600 dark:text-purple-400" />
+        <div className="flex items-center justify-between">
+          <div className="flex items-center gap-6">
+            <div className="bg-purple-100 dark:bg-purple-500/10 p-4 rounded-2xl border border-purple-200 dark:border-purple-500/20 animate-pulse shadow-sm dark:shadow-none">
+              <Layers className="h-8 w-8 text-purple-600 dark:text-purple-400" />
+            </div>
+            <div>
+              <h1 className="text-3xl font-bold text-slate-900 dark:text-slate-100 flex items-center gap-3">
+                閃卡複習
+              </h1>
+              <p className="text-slate-600 dark:text-slate-500 mt-1">{document?.original_filename}</p>
+            </div>
           </div>
-          <div>
-            <h1 className="text-3xl font-bold text-slate-900 dark:text-slate-100 flex items-center gap-3">
-              閃卡複習
-            </h1>
-            <p className="text-slate-600 dark:text-slate-500 mt-1">{document?.original_filename}</p>
-          </div>
+          {history.length > 0 && (
+            <button
+              onClick={() => setShowHistory(!showHistory)}
+              className={`flex items-center gap-2 px-4 py-2 rounded-xl transition-all ${
+                showHistory
+                  ? 'bg-purple-100 dark:bg-purple-500/20 text-purple-700 dark:text-purple-300'
+                  : 'bg-white dark:bg-slate-800 text-slate-600 dark:text-slate-400 hover:bg-slate-50 dark:hover:bg-slate-700'
+              } border border-slate-200 dark:border-slate-700`}
+            >
+              <History className="h-4 w-4" />
+              歷史記錄 ({history.length})
+            </button>
+          )}
         </div>
       </div>
 
-      {/* Generate Section */}
-      {!flashcards && (
+      {/* History Panel */}
+      {showHistory && history.length > 0 && (
+        <div className="glass-card rounded-2xl p-6 border border-purple-200 dark:border-purple-500/20 animate-fade-in">
+          <h3 className="font-bold text-slate-900 dark:text-slate-100 mb-4 flex items-center gap-2">
+            <Clock className="h-5 w-5 text-purple-500" />
+            閃卡歷史記錄
+          </h3>
+          <div className="grid gap-3">
+            {history.map((item) => (
+              <button
+                key={item.id}
+                onClick={() => loadFromHistory(item)}
+                className="flex items-center justify-between p-4 bg-white dark:bg-slate-900/50 rounded-xl border border-slate-200 dark:border-white/5 hover:border-purple-300 dark:hover:border-purple-500/30 hover:bg-purple-50 dark:hover:bg-purple-500/5 transition-all text-left"
+              >
+                <div>
+                  <p className="font-medium text-slate-900 dark:text-slate-100">
+                    {item.deck_title || '閃卡牌組'}
+                  </p>
+                  <p className="text-sm text-slate-500 dark:text-slate-400">
+                    {item.cards?.length || 0} 張卡片 · {formatDate(item.created_at)}
+                  </p>
+                </div>
+                <ChevronRight className="h-5 w-5 text-slate-400" />
+              </button>
+            ))}
+          </div>
+        </div>
+      )}
+
+      {/* Generate Section - 顯示在有歷史記錄時變成「生成新閃卡」按鈕 */}
+      {!flashcards && !generating && (
         <div className="glass-card rounded-2xl p-12 text-center border-dashed border-2 border-slate-300 dark:border-slate-700 animate-scale-in">
           <div className="bg-purple-100 dark:bg-purple-500/10 w-20 h-20 rounded-full flex items-center justify-center mx-auto mb-6 animate-float">
             <Sparkles className="h-10 w-10 text-purple-600 dark:text-purple-400" />
@@ -183,9 +274,9 @@ function FlashcardsPage() {
                   setFlashcards(null);
                 }}
                 className="p-2 hover:bg-slate-100 dark:hover:bg-white/5 rounded-lg transition-colors text-slate-500 dark:text-slate-400 hover:text-purple-600 dark:hover:text-purple-400"
-                title="重新生成"
+                title="生成新閃卡"
               >
-                <RotateCcw className="h-5 w-5" />
+                <Plus className="h-5 w-5" />
               </button>
             </div>
           </div>
@@ -263,7 +354,7 @@ function FlashcardsPage() {
             <div className="grid grid-cols-2 md:grid-cols-3 lg:grid-cols-4 gap-4">
               {flashcards.cards.map((c, idx) => (
                 <button
-                  key={c.id}
+                  key={c.id || idx}
                   onClick={() => {
                     setCurrentCard(idx);
                     setIsFlipped(false);

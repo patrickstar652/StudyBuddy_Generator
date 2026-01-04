@@ -56,15 +56,33 @@ export const studyApi = {
     return response.data;
   },
 
+  // 獲取測驗歷史
+  getQuizzes: async (docId) => {
+    const response = await api.get(`/study/quizzes/${docId}`);
+    return response.data;
+  },
+
   // 生成閃卡
   generateFlashcards: async (docId, options = {}) => {
     const response = await api.post(`/study/flashcards/${docId}`, options);
     return response.data;
   },
 
+  // 獲取閃卡歷史
+  getFlashcards: async (docId) => {
+    const response = await api.get(`/study/flashcards/${docId}`);
+    return response.data;
+  },
+
   // 生成摘要
   generateSummary: async (docId, options = {}) => {
     const response = await api.post(`/study/summary/${docId}`, options);
+    return response.data;
+  },
+
+  // 獲取摘要歷史
+  getSummaries: async (docId) => {
+    const response = await api.get(`/study/summaries/${docId}`);
     return response.data;
   },
 

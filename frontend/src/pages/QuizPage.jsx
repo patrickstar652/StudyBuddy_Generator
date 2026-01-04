@@ -9,6 +9,9 @@ import {
   ChevronRight,
   Settings,
   Sparkles,
+  History,
+  Clock,
+  Plus,
 } from 'lucide-react';
 import toast from 'react-hot-toast';
 import LoadingSpinner, { LoadingButton } from '../components/LoadingSpinner';
@@ -18,12 +21,14 @@ function QuizPage() {
   const { docId } = useParams();
   const [document, setDocument] = useState(null);
   const [quiz, setQuiz] = useState(null);
+  const [history, setHistory] = useState([]);
   const [loading, setLoading] = useState(true);
   const [generating, setGenerating] = useState(false);
   const [currentQuestion, setCurrentQuestion] = useState(0);
   const [answers, setAnswers] = useState({});
   const [showResults, setShowResults] = useState(false);
   const [showSettings, setShowSettings] = useState(false);
+  const [showHistory, setShowHistory] = useState(false);
   const [settings, setSettings] = useState({
     numQuestions: 5,
     questionType: 'mixed',
@@ -31,6 +36,7 @@ function QuizPage() {
 
   useEffect(() => {
     fetchDocument();
+    fetchHistory();
   }, [docId]);
 
   const fetchDocument = async () => {
@@ -43,6 +49,35 @@ function QuizPage() {
     } finally {
       setLoading(false);
     }
+  };
+
+  const fetchHistory = async () => {
+    try {
+      const data = await studyApi.getQuizzes(docId);
+      setHistory(data.quizzes || []);
+      // 如果有歷史記錄，自動載入最新的一筆
+      if (data.quizzes && data.quizzes.length > 0) {
+        const latest = data.quizzes[0];
+        setQuiz({
+          quiz_title: latest.title,
+          questions: latest.questions,
+        });
+      }
+    } catch (error) {
+      console.error('Failed to fetch quiz history:', error);
+    }
+  };
+
+  const loadFromHistory = (item) => {
+    setQuiz({
+      quiz_title: item.title,
+      questions: item.questions,
+    });
+    setAnswers({});
+    setCurrentQuestion(0);
+    setShowResults(false);
+    setShowHistory(false);
+    toast.success('已載入歷史測驗');
   };
 
   const generateQuiz = async () => {
@@ -61,6 +96,8 @@ function QuizPage() {
       } else {
         setQuiz(result.quiz);
         toast.success('Simulation ready');
+        // 重新載入歷史
+        fetchHistory();
       }
     } catch (error) {
       console.error('Failed to generate quiz:', error);
@@ -84,6 +121,17 @@ function QuizPage() {
       }
     });
     return { correct, total: quiz.questions.length };
+  };
+
+  const formatDate = (dateString) => {
+    const date = new Date(dateString);
+    return date.toLocaleDateString('zh-TW', {
+      year: 'numeric',
+      month: 'short',
+      day: 'numeric',
+      hour: '2-digit',
+      minute: '2-digit',
+    });
   };
 
   if (loading) {
@@ -114,15 +162,59 @@ function QuizPage() {
               <p className="text-slate-600 dark:text-slate-500">{document?.original_filename}</p>
             </div>
           </div>
-          <button
-            onClick={() => setShowSettings(!showSettings)}
-            className="p-3 bg-white dark:bg-slate-800 hover:bg-slate-50 dark:hover:bg-slate-700 rounded-xl transition-colors border border-slate-200 dark:border-white/5 shadow-sm dark:shadow-none"
-            title="設定"
-          >
-            <Settings className="h-5 w-5 text-slate-500 dark:text-slate-400 hover:text-cyan-600 dark:hover:text-cyan-400 function-spin" />
-          </button>
+          <div className="flex items-center gap-2">
+            {history.length > 0 && (
+              <button
+                onClick={() => setShowHistory(!showHistory)}
+                className={`flex items-center gap-2 px-4 py-2 rounded-xl transition-all ${
+                  showHistory
+                    ? 'bg-blue-100 dark:bg-blue-500/20 text-blue-700 dark:text-blue-300'
+                    : 'bg-white dark:bg-slate-800 text-slate-600 dark:text-slate-400 hover:bg-slate-50 dark:hover:bg-slate-700'
+                } border border-slate-200 dark:border-slate-700`}
+              >
+                <History className="h-4 w-4" />
+                歷史 ({history.length})
+              </button>
+            )}
+            <button
+              onClick={() => setShowSettings(!showSettings)}
+              className="p-3 bg-white dark:bg-slate-800 hover:bg-slate-50 dark:hover:bg-slate-700 rounded-xl transition-colors border border-slate-200 dark:border-white/5 shadow-sm dark:shadow-none"
+              title="設定"
+            >
+              <Settings className="h-5 w-5 text-slate-500 dark:text-slate-400 hover:text-cyan-600 dark:hover:text-cyan-400 function-spin" />
+            </button>
+          </div>
         </div>
       </div>
+
+      {/* History Panel */}
+      {showHistory && history.length > 0 && (
+        <div className="glass-card rounded-2xl p-6 border border-blue-200 dark:border-blue-500/20 animate-fade-in">
+          <h3 className="font-bold text-slate-900 dark:text-slate-100 mb-4 flex items-center gap-2">
+            <Clock className="h-5 w-5 text-blue-500" />
+            測驗歷史記錄
+          </h3>
+          <div className="grid gap-3">
+            {history.map((item) => (
+              <button
+                key={item.id}
+                onClick={() => loadFromHistory(item)}
+                className="flex items-center justify-between p-4 bg-white dark:bg-slate-900/50 rounded-xl border border-slate-200 dark:border-white/5 hover:border-blue-300 dark:hover:border-blue-500/30 hover:bg-blue-50 dark:hover:bg-blue-500/5 transition-all text-left"
+              >
+                <div>
+                  <p className="font-medium text-slate-900 dark:text-slate-100">
+                    {item.title || '測驗'}
+                  </p>
+                  <p className="text-sm text-slate-500 dark:text-slate-400">
+                    {item.questions?.length || 0} 題 · {formatDate(item.created_at)}
+                  </p>
+                </div>
+                <ChevronRight className="h-5 w-5 text-slate-400" />
+              </button>
+            ))}
+          </div>
+        </div>
+      )}
 
       {/* Settings Panel */}
       {showSettings && (
@@ -168,7 +260,7 @@ function QuizPage() {
       )}
 
       {/* Generate Button */}
-      {!quiz && (
+      {!quiz && !generating && (
         <div className="glass-card rounded-2xl p-12 text-center border-dashed border-2 border-slate-300 dark:border-slate-700 animate-scale-in">
           <ClipboardList className="h-16 w-16 text-blue-600 dark:text-blue-400 mx-auto mb-6 animate-float" />
           <h2 className="text-2xl font-bold text-slate-900 dark:text-slate-100 mb-3">
@@ -197,9 +289,22 @@ function QuizPage() {
               <span className="text-sm text-slate-600 dark:text-slate-400 font-mono">
                 問題 <span className="text-blue-600 dark:text-blue-400 font-bold">{currentQuestion + 1}</span> / {quiz.questions.length}
               </span>
-              <span className="text-sm text-slate-600 dark:text-slate-500">
-                已完成：{Object.keys(answers).length}
-              </span>
+              <div className="flex items-center gap-4">
+                <span className="text-sm text-slate-600 dark:text-slate-500">
+                  已完成：{Object.keys(answers).length}
+                </span>
+                <button
+                  onClick={() => {
+                    setQuiz(null);
+                    setAnswers({});
+                    setShowResults(false);
+                  }}
+                  className="p-1.5 hover:bg-slate-100 dark:hover:bg-white/5 rounded-lg transition-colors text-slate-500 dark:text-slate-400 hover:text-blue-600 dark:hover:text-blue-400"
+                  title="生成新測驗"
+                >
+                  <Plus className="h-4 w-4" />
+                </button>
+              </div>
             </div>
             <div className="h-2 bg-slate-200 dark:bg-slate-800 rounded-full overflow-hidden">
               <div
