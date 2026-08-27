@@ -1,11 +1,13 @@
 import { Link } from 'react-router-dom';
-import { FileText, Trash2, Calendar, Hash, ArrowRight } from 'lucide-react';
+import { FileText, Trash2, Hash, ArrowRight } from 'lucide-react';
 
-function DocumentCard({ document, onDelete }) {
+function DocumentCard({ document, onDelete, deleting = false }) {
   const formatFileSize = (bytes) => {
-    if (bytes < 1024) return bytes + ' B';
-    if (bytes < 1024 * 1024) return (bytes / 1024).toFixed(1) + ' KB';
-    return (bytes / 1024 / 1024).toFixed(2) + ' MB';
+    const size = Number(bytes);
+    if (!Number.isFinite(size) || size < 0) return '—';
+    if (size < 1024) return `${size} B`;
+    if (size < 1024 * 1024) return `${(size / 1024).toFixed(1)} KB`;
+    return `${(size / 1024 / 1024).toFixed(2)} MB`;
   };
 
   return (
@@ -22,9 +24,9 @@ function DocumentCard({ document, onDelete }) {
             <div className="overflow-hidden fade-mask w-full">
               <Link
                 to={`/document/${document.id}`}
-                className="flex w-fit animate-scroll hover:pause group/text"
+                className="flex w-fit animate-scroll group/text"
               >
-                <span className="font-semibold text-slate-900 dark:text-slate-100 group-hover/text:text-blue-600 dark:group-hover/text:text-cyan-400 transition-colors whitespace-nowrap mr-8 text-lg tracking-tight">
+                <span aria-hidden="true" className="font-semibold text-slate-900 dark:text-slate-100 group-hover/text:text-blue-600 dark:group-hover/text:text-cyan-400 transition-colors whitespace-nowrap mr-8 text-lg tracking-tight">
                   {document.original_filename}
                 </span>
                 <span className="font-semibold text-slate-900 dark:text-slate-100 group-hover/text:text-blue-600 dark:group-hover/text:text-cyan-400 transition-colors whitespace-nowrap mr-8 text-lg tracking-tight">
@@ -44,11 +46,14 @@ function DocumentCard({ document, onDelete }) {
         </div>
         
         <button
+          type="button"
           onClick={() => onDelete(document.id)}
-          className="p-2 text-slate-400 dark:text-slate-500 hover:text-red-500 dark:hover:text-red-400 hover:bg-red-50 dark:hover:bg-red-500/10 rounded-lg transition-colors opacity-0 group-hover:opacity-100"
-          title="刪除文件"
+          disabled={deleting}
+          aria-label={`刪除 ${document.original_filename || '文件'}`}
+          className="p-2 text-slate-400 dark:text-slate-500 hover:text-red-500 dark:hover:text-red-400 hover:bg-red-50 dark:hover:bg-red-500/10 rounded-lg transition-colors opacity-100 sm:opacity-0 sm:group-hover:opacity-100 focus:opacity-100 disabled:opacity-50 disabled:cursor-wait"
+          title={deleting ? '正在刪除' : '刪除文件'}
         >
-          <Trash2 className="h-5 w-5" />
+          <Trash2 className={`h-5 w-5 ${deleting ? 'animate-pulse' : ''}`} />
         </button>
       </div>
 

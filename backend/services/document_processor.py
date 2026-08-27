@@ -5,7 +5,7 @@
 
 import os
 from typing import List, Dict, Any
-from PyPDF2 import PdfReader
+from pypdf import PdfReader
 from docx import Document
 import tiktoken
 
@@ -122,28 +122,6 @@ class DocumentProcessor:
         
         return chunks
     
-    def get_document_info(self, file_path: str) -> Dict[str, Any]:
-        """
-        獲取文件資訊
-        
-        Args:
-            file_path: 文件路徑
-        
-        Returns:
-            文件資訊字典
-        """
-        text = self.extract_text(file_path)
-        chunks = self.split_into_chunks(text)
-        
-        return {
-            "total_characters": len(text),
-            "total_tokens": self.count_tokens(text),
-            "total_chunks": len(chunks),
-            "file_size": os.path.getsize(file_path),
-            "file_name": os.path.basename(file_path)
-        }
-
-
 def get_document_processor() -> DocumentProcessor:
     """獲取文件處理器實例"""
     return DocumentProcessor()

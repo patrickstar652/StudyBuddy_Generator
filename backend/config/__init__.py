@@ -1,7 +1,15 @@
-"""
-Configuration package
-"""
+"""Backend configuration and persistence helpers."""
 
-from .supabase_client import get_supabase, SupabaseClient
+from .database import (
+    Database,
+    DatabaseConfigurationError,
+    get_database,
+    is_database_configured,
+)
 
-__all__ = ['get_supabase', 'SupabaseClient']
+__all__ = [
+    "Database",
+    "DatabaseConfigurationError",
+    "get_database",
+    "is_database_configured",
+]

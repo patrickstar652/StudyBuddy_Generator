@@ -1,211 +1,253 @@
-"""
-RAG（檢索增強生成）服務
-處理文件嵌入和語義搜索
-"""
+"""RAG indexing, persistence hydration, and semantic search services."""
+
+from __future__ import annotations
 
 import os
-import numpy as np
-from typing import List, Dict, Any, Optional
-from sentence_transformers import SentenceTransformer
-import faiss
+import threading
+from typing import Any, Optional
 
+import faiss
+import numpy as np
+from sentence_transformers import SentenceTransformer
+
+from config import get_database, is_database_configured
 from .document_processor import get_document_processor
 
 
 class RAGService:
+    """Create embeddings and maintain a per-document FAISS read-through cache."""
+
     def __init__(self):
-        # 使用中文優化的嵌入模型
-        model_name = os.getenv("EMBEDDING_MODEL", "shibing624/text2vec-base-chinese")
-        print(f"載入嵌入模型: {model_name}")
-        self.embedding_model = SentenceTransformer(model_name)
-        self.embedding_dim = self.embedding_model.get_sentence_embedding_dimension()
-        print(f"嵌入維度: {self.embedding_dim}")
-        self.document_processor = get_document_processor()
-        
-        # 內存中的向量索引（每個文件一個）
-        self.indices: Dict[str, faiss.IndexFlatIP] = {}
-        self.chunks_store: Dict[str, List[Dict]] = {}
-    
-    def create_embeddings(self, texts: List[str]) -> np.ndarray:
-        """
-        為文字列表創建嵌入向量
-        使用中文優化模型 text2vec-base-chinese
-        
-        Args:
-            texts: 文字列表
-        
-        Returns:
-            嵌入向量陣列 (768 維)
-        """
-        # 使用 batch 處理提高效率
-        embeddings = self.embedding_model.encode(
-            texts, 
-            convert_to_numpy=True,
-            normalize_embeddings=True,  # 自動正規化
-            show_progress_bar=len(texts) > 10  # 大量文字時顯示進度
+        self.model_name = os.getenv(
+            "EMBEDDING_MODEL",
+            "shibing624/text2vec-base-chinese",
         )
-        # 確保正規化（用於餘弦相似度）
+        self.embedding_model = SentenceTransformer(self.model_name)
+        self.embedding_dim = self.embedding_model.get_embedding_dimension()
+        self.document_processor = get_document_processor()
+
+        self.indices: dict[str, faiss.IndexFlatIP] = {}
+        self.chunks_store: dict[str, list[dict[str, Any]]] = {}
+        self.full_text_store: dict[str, str] = {}
+        self._cache_lock = threading.RLock()
+
+    def create_embeddings(self, texts: list[str]) -> np.ndarray:
+        """Create normalized float32 embeddings for text chunks."""
+
+        embeddings = self.embedding_model.encode(
+            texts,
+            convert_to_numpy=True,
+            normalize_embeddings=True,
+            show_progress_bar=len(texts) > 10,
+        )
+        embeddings = np.ascontiguousarray(embeddings, dtype=np.float32)
+        # Keep this explicit so alternate SentenceTransformer implementations
+        # still satisfy IndexFlatIP's cosine-similarity assumptions.
         faiss.normalize_L2(embeddings)
         return embeddings
-    
-    def index_document(self, doc_id: str, file_path: str) -> Dict[str, Any]:
-        """
-        索引一個文件
-        
-        Args:
-            doc_id: 文件 ID
-            file_path: 文件路徑
-        
-        Returns:
-            索引結果資訊（包含可保存到 Supabase 的嵌入數據）
-        """
-        # 提取文字
-        text = self.document_processor.extract_text(file_path)
-        
-        # 分割成區塊
+
+    def index_text(self, document_id: str, text: str) -> dict[str, Any]:
+        """Index already-extracted text and return persistence-ready chunks."""
+
         chunks = self.document_processor.split_into_chunks(text)
-        
         if not chunks:
             raise ValueError("No content could be extracted from the document")
-        
-        # 創建嵌入
-        texts = [chunk["content"] for chunk in chunks]
-        embeddings = self.create_embeddings(texts)
-        
-        # 創建 FAISS 索引
-        index = faiss.IndexFlatIP(self.embedding_dim)
-        index.add(embeddings)
-        
-        # 存儲索引和區塊
-        self.indices[doc_id] = index
-        self.chunks_store[doc_id] = chunks
-        
-        # 準備 Supabase 嵌入數據
-        embeddings_for_db = []
-        for i, (chunk, embedding) in enumerate(zip(chunks, embeddings)):
-            embeddings_for_db.append({
-                'document_id': doc_id,
-                'content': chunk['content'],
-                'chunk_index': chunk['chunk_index'],
-                'embedding': embedding.tolist()  # 轉換為列表以便 JSON 序列化
-            })
-        
+
+        embeddings = self.create_embeddings([chunk["content"] for chunk in chunks])
+        self._cache_document(document_id, chunks, embeddings, text)
+
+        chunks_for_database = []
+        for chunk, embedding in zip(chunks, embeddings):
+            chunks_for_database.append(
+                {
+                    "document_id": document_id,
+                    "content": chunk["content"],
+                    "chunk_index": chunk["chunk_index"],
+                    "token_count": chunk["token_count"],
+                    "start_token": chunk["start_token"],
+                    "end_token": chunk["end_token"],
+                    "embedding": embedding,
+                }
+            )
+
         return {
-            "doc_id": doc_id,
+            "doc_id": document_id,
             "chunks_indexed": len(chunks),
             "total_tokens": sum(chunk["token_count"] for chunk in chunks),
-            "full_text": text,  # 返回完整文字供後續使用
-            "embeddings_for_db": embeddings_for_db  # 供 Supabase 保存
+            "full_text": text,
+            "embedding_model": self.model_name,
+            "embedding_dimension": self.embedding_dim,
+            "embeddings_for_db": chunks_for_database,
         }
-    
-    def search(self, doc_id: str, query: str, top_k: int = 5) -> List[Dict[str, Any]]:
-        """
-        在文件中搜索相關內容
-        
-        Args:
-            doc_id: 文件 ID
-            query: 搜索查詢
-            top_k: 返回結果數量
-        
-        Returns:
-            相關區塊列表
-        """
-        if doc_id not in self.indices:
-            raise ValueError(f"Document {doc_id} not indexed")
-        
-        # 創建查詢嵌入
+
+    def _cache_document(
+        self,
+        document_id: str,
+        chunks: list[dict[str, Any]],
+        embeddings: np.ndarray,
+        full_text: str,
+    ) -> None:
+        """Atomically replace one document in the process-local FAISS cache."""
+
+        if embeddings.ndim != 2 or embeddings.shape[0] != len(chunks):
+            raise ValueError("Chunk and embedding counts do not match")
+
+        index = faiss.IndexFlatIP(int(embeddings.shape[1]))
+        index.add(np.ascontiguousarray(embeddings, dtype=np.float32))
+        with self._cache_lock:
+            self.indices[document_id] = index
+            self.chunks_store[document_id] = chunks
+            self.full_text_store[document_id] = full_text
+
+    def _hydrate_document(self, document_id: str) -> bool:
+        """Load persisted chunks/embeddings into FAISS after a process restart."""
+
+        with self._cache_lock:
+            if document_id in self.indices:
+                return True
+
+        if not is_database_configured():
+            return False
+
+        payload = get_database().get_document_rag_payload(document_id)
+        if payload is None or not payload["chunks"]:
+            return False
+
+        persisted_model = payload["embedding_model"]
+        persisted_dimension = int(payload["embedding_dimension"])
+        if (
+            persisted_model != self.model_name
+            or persisted_dimension != self.embedding_dim
+        ):
+            raise ValueError(
+                "Stored document embeddings were created with "
+                f"{persisted_model!r} ({persisted_dimension} dimensions), but "
+                f"the configured model is {self.model_name!r} "
+                f"({self.embedding_dim} dimensions). Restore the exact original "
+                "EMBEDDING_MODEL or re-upload the document."
+            )
+
+        stored_chunks = payload["chunks"]
+
+        embeddings = np.ascontiguousarray(
+            [np.asarray(chunk["embedding"], dtype=np.float32) for chunk in stored_chunks],
+            dtype=np.float32,
+        )
+        if embeddings.ndim != 2:
+            raise ValueError(f"Stored embeddings for document {document_id} are invalid")
+        if embeddings.shape[1] != persisted_dimension:
+            raise ValueError(
+                f"Stored vectors contain {embeddings.shape[1]} dimensions, but "
+                f"document metadata declares {persisted_dimension}; the persisted "
+                "RAG data is inconsistent."
+            )
+        faiss.normalize_L2(embeddings)
+
+        chunks = [
+            {
+                "content": row["content"],
+                "chunk_index": row["chunk_index"],
+                "token_count": row["token_count"],
+                "start_token": row["start_token"],
+                "end_token": row["end_token"],
+            }
+            for row in stored_chunks
+        ]
+        full_text = payload["extracted_text"]
+        if full_text is None:
+            return False
+
+        self._cache_document(document_id, chunks, embeddings, full_text)
+        return True
+
+    def search(
+        self,
+        document_id: str,
+        query: str,
+        top_k: int = 5,
+    ) -> list[dict[str, Any]]:
+        """Search a document's cached or lazily hydrated vector index."""
+
+        if not self._hydrate_document(document_id):
+            raise ValueError(f"Document {document_id} not indexed")
+
         query_embedding = self.create_embeddings([query])
-        
-        # 搜索
-        index = self.indices[doc_id]
-        scores, indices = index.search(query_embedding, min(top_k, index.ntotal))
-        
-        # 獲取結果
+        with self._cache_lock:
+            index = self.indices[document_id]
+            chunks = self.chunks_store[document_id]
+            scores, indices = index.search(
+                query_embedding,
+                min(top_k, index.ntotal),
+            )
+
         results = []
-        chunks = self.chunks_store[doc_id]
-        
-        for score, idx in zip(scores[0], indices[0]):
-            if idx < len(chunks):
-                results.append({
-                    "content": chunks[idx]["content"],
-                    "chunk_index": chunks[idx]["chunk_index"],
-                    "score": float(score)
-                })
-        
+        for score, chunk_position in zip(scores[0], indices[0]):
+            if 0 <= chunk_position < len(chunks):
+                chunk = chunks[chunk_position]
+                results.append(
+                    {
+                        "content": chunk["content"],
+                        "chunk_index": chunk["chunk_index"],
+                        "score": float(score),
+                    }
+                )
         return results
-    
-    def get_full_text(self, doc_id: str) -> str:
-        """
-        獲取文件的完整文字
-        
-        Args:
-            doc_id: 文件 ID
-        
-        Returns:
-            完整文字
-        """
-        if doc_id not in self.chunks_store:
-            raise ValueError(f"Document {doc_id} not indexed")
-        
-        chunks = self.chunks_store[doc_id]
-        # 合併所有區塊（考慮重疊，只取每個區塊的前半部分，最後一個區塊除外）
-        full_text = ""
-        for i, chunk in enumerate(chunks):
-            if i == len(chunks) - 1:
-                full_text += chunk["content"]
-            else:
-                # 只取非重疊部分
-                content = chunk["content"]
-                # 大約取 80% 避免重複
-                cut_point = int(len(content) * 0.8)
-                full_text += content[:cut_point]
-        
-        return full_text
-    
-    def get_context_for_query(self, doc_id: str, query: str, max_tokens: int = 4000) -> str:
-        """
-        獲取用於回答問題的上下文
-        
-        Args:
-            doc_id: 文件 ID
-            query: 問題
-            max_tokens: 最大 token 數量
-        
-        Returns:
-            相關上下文
-        """
-        results = self.search(doc_id, query, top_k=10)
-        
+
+    def get_full_text(self, document_id: str) -> str:
+        """Return exact extracted text, hydrating it from Postgres if needed."""
+
+        if not self._hydrate_document(document_id):
+            raise ValueError(f"Document {document_id} not indexed")
+        with self._cache_lock:
+            return self.full_text_store[document_id]
+
+    def get_context_for_query(
+        self,
+        document_id: str,
+        query: str,
+        max_tokens: int = 4000,
+    ) -> str:
+        """Build a token-bounded context from the most relevant chunks."""
+
+        results = self.search(document_id, query, top_k=10)
         context_parts = []
         total_tokens = 0
-        
         for result in results:
             chunk_tokens = self.document_processor.count_tokens(result["content"])
             if total_tokens + chunk_tokens > max_tokens:
                 break
             context_parts.append(result["content"])
             total_tokens += chunk_tokens
-        
         return "\n\n---\n\n".join(context_parts)
-    
-    def is_document_indexed(self, doc_id: str) -> bool:
-        """檢查文件是否已索引"""
-        return doc_id in self.indices
-    
-    def remove_document(self, doc_id: str):
-        """移除文件索引"""
-        if doc_id in self.indices:
-            del self.indices[doc_id]
-        if doc_id in self.chunks_store:
-            del self.chunks_store[doc_id]
+
+    def is_document_indexed(self, document_id: str) -> bool:
+        """Check memory and then persistent storage for a document index."""
+
+        return self._hydrate_document(document_id)
+
+    def remove_document(self, document_id: str) -> None:
+        """Remove one document from the process-local cache."""
+
+        with self._cache_lock:
+            self.indices.pop(document_id, None)
+            self.chunks_store.pop(document_id, None)
+            self.full_text_store.pop(document_id, None)
 
 
-# 單例實例
 _rag_service: Optional[RAGService] = None
 
+
 def get_rag_service() -> RAGService:
-    """獲取 RAG 服務實例"""
+    """Return the process-local RAG service."""
+
     global _rag_service
     if _rag_service is None:
         _rag_service = RAGService()
     return _rag_service
+
+
+def evict_document_cache(document_id: str) -> None:
+    """Evict cached RAG state without initializing the embedding model."""
+
+    if _rag_service is not None:
+        _rag_service.remove_document(document_id)

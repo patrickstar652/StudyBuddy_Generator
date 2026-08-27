@@ -19,18 +19,8 @@ export default {
           700: '#1d4ed8',
           800: '#1e40af',
           900: '#1e3a8a',
-        }
+        },
       },
-      animation: {
-        'flip': 'flip 0.6s ease-in-out',
-        'bounce-slow': 'bounce 2s infinite',
-      },
-      keyframes: {
-        flip: {
-          '0%': { transform: 'rotateY(0deg)' },
-          '100%': { transform: 'rotateY(180deg)' },
-        }
-      }
     },
   },
   plugins: [],

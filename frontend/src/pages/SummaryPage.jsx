@@ -1,4 +1,4 @@
-import { useState, useEffect } from 'react';
+import { useCallback, useEffect, useRef, useState } from 'react';
 import { useParams, Link } from 'react-router-dom';
 import {
   ArrowLeft,
@@ -16,7 +16,13 @@ import {
 } from 'lucide-react';
 import toast from 'react-hot-toast';
 import LoadingSpinner, { LoadingButton } from '../components/LoadingSpinner';
-import { documentApi, studyApi } from '../services/api';
+import {
+  documentApi,
+  getApiErrorMessage,
+  isRequestCanceled,
+  studyApi,
+} from '../services/api';
+import { normalizeSummary, normalizeSummaryHistory } from '../utils/studyData';
 
 function SummaryPage() {
   const { docId } = useParams();
@@ -28,32 +34,39 @@ function SummaryPage() {
   const [expandedPoints, setExpandedPoints] = useState({});
   const [numPoints, setNumPoints] = useState(5);
   const [showHistory, setShowHistory] = useState(false);
+  const requestSequenceRef = useRef(0);
+  const generationControllerRef = useRef(null);
 
-  useEffect(() => {
-    fetchDocument();
-    fetchHistory();
-  }, [docId]);
-
-  const fetchDocument = async () => {
+  const fetchDocument = useCallback(async (signal, requestId) => {
     try {
-      const data = await documentApi.get(docId);
+      const data = await documentApi.get(docId, { signal });
+      if (signal.aborted || requestSequenceRef.current !== requestId) return;
       setDocument(data.document);
     } catch (error) {
+      if (isRequestCanceled(error) || requestSequenceRef.current !== requestId) return;
       console.error('Failed to fetch document:', error);
-      toast.error('Failed to load document');
+      toast.error(getApiErrorMessage(error, '無法載入文件'));
     } finally {
-      setLoading(false);
+      if (!signal.aborted && requestSequenceRef.current === requestId) {
+        setLoading(false);
+      }
     }
-  };
+  }, [docId]);
 
-  const fetchHistory = async () => {
+  const fetchHistory = useCallback(async (
+    loadLatest = false,
+    signal,
+    requestId = requestSequenceRef.current,
+  ) => {
     try {
-      const data = await studyApi.getSummaries(docId);
-      setHistory(data.summaries || []);
-      // 如果有歷史記錄，自動載入最新的一筆
-      if (data.summaries && data.summaries.length > 0) {
-        const latest = data.summaries[0];
-        setSummary({
+      const data = await studyApi.getSummaries(docId, { signal });
+      if (signal?.aborted || requestSequenceRef.current !== requestId) return;
+
+      const normalizedHistory = normalizeSummaryHistory(data?.summaries);
+      setHistory(normalizedHistory);
+      if (loadLatest && normalizedHistory.length > 0) {
+        const latest = normalizedHistory[0];
+        setSummary((current) => current ?? {
           document_title: latest.document_title,
           tldr: latest.tldr,
           key_points: latest.key_points,
@@ -61,40 +74,97 @@ function SummaryPage() {
         });
       }
     } catch (error) {
+      if (isRequestCanceled(error) || requestSequenceRef.current !== requestId) return;
       console.error('Failed to fetch summary history:', error);
     }
-  };
+  }, [docId]);
+
+  useEffect(() => {
+    const requestId = ++requestSequenceRef.current;
+    const controller = new AbortController();
+
+    generationControllerRef.current?.abort();
+    generationControllerRef.current = null;
+    setDocument(null);
+    setSummary(null);
+    setHistory([]);
+    setLoading(true);
+    setGenerating(false);
+    setExpandedPoints({});
+    setNumPoints(5);
+    setShowHistory(false);
+
+    fetchDocument(controller.signal, requestId);
+    fetchHistory(true, controller.signal, requestId);
+
+    return () => {
+      controller.abort();
+      generationControllerRef.current?.abort();
+      generationControllerRef.current = null;
+      requestSequenceRef.current = requestId + 1;
+    };
+  }, [fetchDocument, fetchHistory]);
 
   const loadFromHistory = (item) => {
-    setSummary({
+    const normalizedSummary = normalizeSummary({
       document_title: item.document_title,
       tldr: item.tldr,
       key_points: item.key_points,
       keywords: item.keywords,
     });
+    if (!normalizedSummary) {
+      toast.error('這筆歷史摘要資料已損毀，無法載入');
+      return;
+    }
+
+    setSummary(normalizedSummary);
     setExpandedPoints({});
     setShowHistory(false);
     toast.success('已載入歷史摘要');
   };
 
   const generateSummary = async () => {
+    generationControllerRef.current?.abort();
+    const controller = new AbortController();
+    const requestId = requestSequenceRef.current;
+    generationControllerRef.current = controller;
     setGenerating(true);
     setSummary(null);
+    setExpandedPoints({});
     try {
-      const result = await studyApi.generateSummary(docId, { num_points: numPoints });
-      if (result.summary.error) {
+      const result = await studyApi.generateSummary(
+        docId,
+        { num_points: numPoints },
+        { signal: controller.signal },
+      );
+      if (controller.signal.aborted || requestSequenceRef.current !== requestId) return;
+
+      if (result?.summary?.error) {
         toast.error(result.summary.error);
       } else {
-        setSummary(result.summary);
+        const normalizedSummary = normalizeSummary(result?.summary);
+        if (!normalizedSummary) {
+          toast.error('伺服器回傳了無效的摘要資料');
+          return;
+        }
+
+        setSummary(normalizedSummary);
         toast.success('Summary compiled successfully');
-        // 重新載入歷史
-        fetchHistory();
+        await fetchHistory(false, controller.signal, requestId);
       }
     } catch (error) {
+      if (isRequestCanceled(error) || requestSequenceRef.current !== requestId) return;
       console.error('Failed to generate summary:', error);
-      toast.error('Summary compilation failed');
+      toast.error(getApiErrorMessage(error, '摘要生成失敗'));
     } finally {
-      setGenerating(false);
+      if (
+        !controller.signal.aborted
+        && requestSequenceRef.current === requestId
+        && generationControllerRef.current === controller
+      ) {
+        generationControllerRef.current = null;
+        setGenerating(false);
+      }
     }
   };
 
@@ -119,7 +189,9 @@ function SummaryPage() {
   };
 
   const formatDate = (dateString) => {
+    if (!dateString) return '時間未知';
     const date = new Date(dateString);
+    if (Number.isNaN(date.getTime())) return '時間未知';
     return date.toLocaleDateString('zh-TW', {
       year: 'numeric',
       month: 'short',
@@ -131,6 +203,17 @@ function SummaryPage() {
 
   if (loading) {
     return <LoadingSpinner message="正在掃描數據模式..." />;
+  }
+
+  if (!document) {
+    return (
+      <div className="text-center py-24 glass-card rounded-3xl animate-scale-in">
+        <p className="text-slate-500 dark:text-slate-400 text-lg">找不到文件或文件暫時無法載入</p>
+        <Link to="/" className="text-green-600 dark:text-green-400 hover:underline mt-4 inline-block font-medium">
+          返回首頁
+        </Link>
+      </div>
+    );
   }
 
   return (
@@ -202,7 +285,7 @@ function SummaryPage() {
       )}
 
       {/* Generate Section */}
-      {!summary && !generating && (
+      {!summary && (
         <div className="glass-card rounded-2xl p-12 text-center border-dashed border-2 border-slate-300 dark:border-slate-700 animate-scale-in">
           <div className="bg-green-100 dark:bg-green-500/10 w-20 h-20 rounded-full flex items-center justify-center mx-auto mb-6 animate-float">
             <Sparkles className="h-10 w-10 text-green-600 dark:text-green-400" />
@@ -218,6 +301,7 @@ function SummaryPage() {
             <select
               value={numPoints}
               onChange={(e) => setNumPoints(parseInt(e.target.value))}
+              disabled={generating}
               className="px-4 py-2 bg-white dark:bg-slate-900 border border-slate-300 dark:border-slate-600 rounded-lg focus:outline-none focus:ring-2 focus:ring-green-500 text-slate-900 dark:text-slate-200"
             >
               {[3, 5, 7, 10].map((n) => (
@@ -258,71 +342,76 @@ function SummaryPage() {
                   <Plus className="h-5 w-5" />
                 </button>
               </div>
-              <p className="text-lg leading-relaxed text-green-50 text-shadow-sm">{summary.tldr}</p>
+              <p className="text-lg leading-relaxed text-green-50">{summary.tldr}</p>
             </div>
           </div>
 
           {/* Key Points */}
-          <div className="glass-card rounded-2xl p-8 animate-fade-in-up delay-100 border border-slate-200 dark:border-white/5">
-            <div className="flex items-center justify-between mb-8">
-              <h3 className="text-xl font-bold text-slate-900 dark:text-slate-100">核心智慧</h3>
-              <button
-                onClick={() => setSummary(null)}
-                className="flex items-center gap-2 text-slate-500 dark:text-slate-400 hover:text-green-600 dark:hover:text-green-400 transition-colors"
-              >
-                <RotateCcw className="h-4 w-4" />
-                重新生成
-              </button>
-            </div>
-            <div className="space-y-4">
-              {summary.key_points?.map((point, idx) => (
-                <div
-                  key={point.id || idx}
-                  className="bg-white dark:bg-slate-900/50 border border-slate-200 dark:border-white/5 rounded-xl overflow-hidden hover:border-green-400/50 dark:hover:border-green-500/30 transition-colors animate-fade-in-up"
-                  style={{ animationDelay: `${idx * 100}ms` }}
+          {summary.key_points.length > 0 && (
+            <div className="glass-card rounded-2xl p-8 animate-fade-in-up delay-100 border border-slate-200 dark:border-white/5">
+              <div className="flex items-center justify-between mb-8">
+                <h3 className="text-xl font-bold text-slate-900 dark:text-slate-100">核心智慧</h3>
+                <button
+                  onClick={() => setSummary(null)}
+                  className="flex items-center gap-2 text-slate-500 dark:text-slate-400 hover:text-green-600 dark:hover:text-green-400 transition-colors"
                 >
-                  <button
-                    onClick={() => togglePoint(point.id || idx)}
-                    className="w-full flex items-center justify-between p-5 hover:bg-slate-50 dark:hover:bg-white/5 transition-colors"
+                  <RotateCcw className="h-4 w-4" />
+                  重新生成
+                </button>
+              </div>
+              <div className="space-y-4">
+                {summary.key_points.map((point, idx) => (
+                  <div
+                    key={point.id || idx}
+                    className="bg-white dark:bg-slate-900/50 border border-slate-200 dark:border-white/5 rounded-xl overflow-hidden hover:border-green-400/50 dark:hover:border-green-500/30 transition-colors animate-fade-in-up"
+                    style={{ animationDelay: `${idx * 100}ms` }}
                   >
-                    <div className="flex items-center gap-4">
-                      <div className="flex-shrink-0 w-8 h-8 bg-green-100 dark:bg-green-500/20 text-green-700 dark:text-green-400 rounded-lg flex items-center justify-center font-bold font-mono border border-green-200 dark:border-green-500/20">
-                        {idx + 1}
+                    <button
+                      onClick={() => point.description && togglePoint(point.id || idx)}
+                      disabled={!point.description}
+                      className="w-full flex items-center justify-between p-5 hover:bg-slate-50 dark:hover:bg-white/5 transition-colors disabled:cursor-default"
+                    >
+                      <div className="flex items-center gap-4">
+                        <div className="flex-shrink-0 w-8 h-8 bg-green-100 dark:bg-green-500/20 text-green-700 dark:text-green-400 rounded-lg flex items-center justify-center font-bold font-mono border border-green-200 dark:border-green-500/20">
+                          {idx + 1}
+                        </div>
+                        <div className="text-left">
+                          <h4 className="font-semibold text-slate-800 dark:text-slate-200 text-lg">
+                            {point.title}
+                          </h4>
+                        </div>
                       </div>
-                      <div className="text-left">
-                        <h4 className="font-semibold text-slate-800 dark:text-slate-200 text-lg">
-                          {point.title}
-                        </h4>
+                      <div className="flex items-center gap-4">
+                        {point.importance && (
+                          <span
+                            className={`px-3 py-1 text-xs font-bold rounded-full border uppercase tracking-wider ${getImportanceColor(
+                              point.importance
+                            )}`}
+                          >
+                            {point.importance}
+                          </span>
+                        )}
+                        {point.description && (
+                          expandedPoints[point.id || idx] ? (
+                            <ChevronUp className="h-5 w-5 text-slate-500" />
+                          ) : (
+                            <ChevronDown className="h-5 w-5 text-slate-400" />
+                          )
+                        )}
                       </div>
-                    </div>
-                    <div className="flex items-center gap-4">
-                      {point.importance && (
-                        <span
-                          className={`px-3 py-1 text-xs font-bold rounded-full border uppercase tracking-wider ${getImportanceColor(
-                            point.importance
-                          )}`}
-                        >
-                          {point.importance}
-                        </span>
-                      )}
-                      {expandedPoints[point.id || idx] ? (
-                        <ChevronUp className="h-5 w-5 text-slate-500" />
-                      ) : (
-                        <ChevronDown className="h-5 w-5 text-slate-400" />
-                      )}
-                    </div>
-                  </button>
-                  {expandedPoints[point.id || idx] && (
-                    <div className="px-5 pb-5 pt-0 animate-fade-in">
-                      <div className="pl-12 border-l-2 border-slate-200 dark:border-slate-700 ml-4">
-                        <p className="text-slate-600 dark:text-slate-400 pl-4 leading-relaxed">{point.description}</p>
+                    </button>
+                    {point.description && expandedPoints[point.id || idx] && (
+                      <div className="px-5 pb-5 pt-0 animate-fade-in">
+                        <div className="pl-12 border-l-2 border-slate-200 dark:border-slate-700 ml-4">
+                          <p className="text-slate-600 dark:text-slate-400 pl-4 leading-relaxed">{point.description}</p>
+                        </div>
                       </div>
-                    </div>
-                  )}
-                </div>
-              ))}
+                    )}
+                  </div>
+                ))}
+              </div>
             </div>
-          </div>
+          )}
 
           {/* Keywords */}
           {summary.keywords && summary.keywords.length > 0 && (

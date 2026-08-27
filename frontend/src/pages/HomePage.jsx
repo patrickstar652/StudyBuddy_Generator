@@ -1,36 +1,48 @@
-import { useState, useEffect } from 'react';
+import { useCallback, useEffect, useState } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { Sparkles, BookOpen, Brain, FileText, Zap } from 'lucide-react';
 import toast from 'react-hot-toast';
 import FileUpload from '../components/FileUpload';
 import DocumentCard from '../components/DocumentCard';
 import LoadingSpinner from '../components/LoadingSpinner';
-import { documentApi } from '../services/api';
+import { documentApi, getApiErrorMessage } from '../services/api';
+
+const MAX_UPLOAD_SIZE = 50 * 1024 * 1024;
 
 function HomePage() {
   const [documents, setDocuments] = useState([]);
   const [loading, setLoading] = useState(true);
   const [uploading, setUploading] = useState(false);
   const [selectedFile, setSelectedFile] = useState(null);
+  const [loadError, setLoadError] = useState('');
+  const [deletingIds, setDeletingIds] = useState(() => new Set());
   const navigate = useNavigate();
 
-  useEffect(() => {
-    fetchDocuments();
-  }, []);
-
-  const fetchDocuments = async () => {
+  const fetchDocuments = useCallback(async () => {
+    setLoading(true);
+    setLoadError('');
     try {
       const data = await documentApi.getAll();
       setDocuments(data.documents || []);
     } catch (error) {
       console.error('Failed to fetch documents:', error);
-      toast.error('Failed to load neural archives');
+      const message = getApiErrorMessage(error, '無法載入文件列表');
+      setLoadError(message);
+      toast.error(message);
     } finally {
       setLoading(false);
     }
-  };
+  }, []);
+
+  useEffect(() => {
+    fetchDocuments();
+  }, [fetchDocuments]);
 
   const handleFileSelect = (file) => {
+    if (file.size > MAX_UPLOAD_SIZE) {
+      toast.error('檔案大小不可超過 50 MB');
+      return;
+    }
     setSelectedFile(file);
   };
 
@@ -42,29 +54,37 @@ function HomePage() {
       const result = await documentApi.upload(selectedFile);
       toast.success('Neural link established successfully!');
       setSelectedFile(null);
-      fetchDocuments();
       
       if (result.document?.id) {
         navigate(`/document/${result.document.id}`);
+      } else {
+        await fetchDocuments();
       }
     } catch (error) {
       console.error('Upload failed:', error);
-      toast.error(error.response?.data?.error || 'Uplink failed. Retry?');
+      toast.error(getApiErrorMessage(error, '文件上傳失敗，請重試'));
     } finally {
       setUploading(false);
     }
   };
 
   const handleDelete = async (docId) => {
-    if (!confirm('Purge this knowledge from the archives?')) return;
+    if (!window.confirm('確定要刪除這份文件嗎？此操作無法復原。')) return;
 
+    setDeletingIds((current) => new Set(current).add(docId));
     try {
       await documentApi.delete(docId);
-      toast.success('Archive purged');
-      setDocuments(documents.filter(doc => doc.id !== docId));
+      toast.success('文件已刪除');
+      setDocuments((current) => current.filter((doc) => doc.id !== docId));
     } catch (error) {
       console.error('Delete failed:', error);
-      toast.error('Purge failed');
+      toast.error(getApiErrorMessage(error, '文件刪除失敗'));
+    } finally {
+      setDeletingIds((current) => {
+        const next = new Set(current);
+        next.delete(docId);
+        return next;
+      });
     }
   };
 
@@ -157,6 +177,18 @@ function HomePage() {
 
         {loading ? (
           <LoadingSpinner message="正在存取神經數據庫..." />
+        ) : loadError ? (
+          <div role="alert" className="glass-card text-center py-16 rounded-3xl border border-amber-300 dark:border-amber-500/30">
+            <p className="text-lg font-medium text-amber-700 dark:text-amber-300">文件列表載入失敗</p>
+            <p className="text-sm text-slate-600 dark:text-slate-400 mt-2">{loadError}</p>
+            <button
+              type="button"
+              onClick={fetchDocuments}
+              className="mt-6 px-5 py-2.5 rounded-xl bg-slate-900 dark:bg-slate-100 text-white dark:text-slate-900 font-medium hover:opacity-90 transition-opacity"
+            >
+              重新載入
+            </button>
+          </div>
         ) : documents.length === 0 ? (
           <div className="glass-card text-center py-24 rounded-3xl border-dashed border-2 border-slate-300 dark:border-slate-700 animate-scale-in">
             <div className="bg-slate-200/50 dark:bg-slate-800/50 w-20 h-20 rounded-full flex items-center justify-center mx-auto mb-6 animate-float">
@@ -172,6 +204,7 @@ function HomePage() {
                 <DocumentCard
                   document={doc}
                   onDelete={handleDelete}
+                  deleting={deletingIds.has(doc.id)}
                 />
               </div>
             ))}

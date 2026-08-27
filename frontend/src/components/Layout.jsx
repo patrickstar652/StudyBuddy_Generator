@@ -1,6 +1,6 @@
 import { Link, useLocation } from 'react-router-dom';
 import { useTheme } from '../context/ThemeContext';
-import { BookOpen, Home, GraduationCap, Sparkles, Sun, Moon } from 'lucide-react';
+import { Home, GraduationCap, Sparkles, Sun, Moon } from 'lucide-react';
 
 function Layout({ children }) {
   const location = useLocation();
@@ -51,6 +51,7 @@ function Layout({ children }) {
 
               <button
                 onClick={toggleTheme}
+                aria-label={theme === 'dark' ? '切換為亮色模式' : '切換為暗色模式'}
                 className="p-2 rounded-xl bg-slate-100 dark:bg-white/10 text-slate-600 dark:text-slate-300 hover:bg-slate-200 dark:hover:bg-white/20 transition-all duration-300 shadow-sm"
                 title={theme === 'dark' ? '切換亮色模式' : '切換暗色模式'}
               >

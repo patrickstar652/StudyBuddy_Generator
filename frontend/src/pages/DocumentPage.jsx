@@ -1,5 +1,5 @@
 import { useState, useEffect } from 'react';
-import { useParams, Link, useNavigate } from 'react-router-dom';
+import { useParams, Link } from 'react-router-dom';
 import {
   FileText,
   ClipboardList,
@@ -12,38 +12,67 @@ import {
 } from 'lucide-react';
 import toast from 'react-hot-toast';
 import LoadingSpinner, { LoadingButton } from '../components/LoadingSpinner';
-import { documentApi, studyApi } from '../services/api';
+import { documentApi, getApiErrorMessage, studyApi } from '../services/api';
 
 function DocumentPage() {
   const { docId } = useParams();
-  const navigate = useNavigate();
   const [document, setDocument] = useState(null);
   const [preview, setPreview] = useState('');
+  const [previewError, setPreviewError] = useState('');
+  const [previewLoading, setPreviewLoading] = useState(false);
   const [loading, setLoading] = useState(true);
   const [question, setQuestion] = useState('');
   const [asking, setAsking] = useState(false);
   const [answer, setAnswer] = useState(null);
 
   useEffect(() => {
-    fetchDocument();
-  }, [docId]);
+    let cancelled = false;
 
-  const fetchDocument = async () => {
-    try {
-      const [docData, previewData] = await Promise.all([
-        documentApi.get(docId),
-        documentApi.preview(docId),
-      ]);
-      setDocument(docData.document);
-      setPreview(previewData.preview);
-    } catch (error) {
-      console.error('Failed to fetch document:', error);
-      toast.error('Failed to retrieve document data');
-      navigate('/');
-    } finally {
-      setLoading(false);
-    }
-  };
+    const fetchDocument = async () => {
+      setLoading(true);
+      setDocument(null);
+      setPreview('');
+      setPreviewError('');
+
+      try {
+        const docData = await documentApi.get(docId);
+        if (cancelled) return;
+
+        setDocument(docData.document);
+        setLoading(false);
+      } catch (error) {
+        if (cancelled) return;
+
+        console.error('Failed to fetch document:', error);
+        toast.error(getApiErrorMessage(error, '無法載入文件'));
+        setLoading(false);
+        return;
+      }
+
+      setPreviewLoading(true);
+      try {
+        const previewData = await documentApi.preview(docId);
+        if (!cancelled) {
+          setPreview(previewData.preview || '');
+        }
+      } catch (error) {
+        if (!cancelled) {
+          console.error('Failed to fetch document preview:', error);
+          setPreviewError(getApiErrorMessage(error, '預覽暫時無法使用'));
+        }
+      } finally {
+        if (!cancelled) {
+          setPreviewLoading(false);
+        }
+      }
+    };
+
+    fetchDocument();
+
+    return () => {
+      cancelled = true;
+    };
+  }, [docId]);
 
   const handleAskQuestion = async (e) => {
     e.preventDefault();
@@ -56,7 +85,7 @@ function DocumentPage() {
       setAnswer(result);
     } catch (error) {
       console.error('Failed to get answer:', error);
-      toast.error('Neural uplink failed');
+      toast.error(getApiErrorMessage(error, '問答服務暫時無法使用'));
     } finally {
       setAsking(false);
     }
@@ -196,7 +225,8 @@ function DocumentPage() {
                             key={idx}
                             className="text-xs text-slate-600 dark:text-slate-400 bg-slate-100 dark:bg-slate-950/50 p-3 rounded-lg border border-slate-200 dark:border-white/5 font-mono"
                           >
-                            {source.content.substring(0, 200)}...
+                            {source.content?.substring(0, 200) || '來源內容無法顯示'}
+                            {source.content?.length > 200 ? '...' : ''}
                           </div>
                         ))}
                       </div>
@@ -213,9 +243,21 @@ function DocumentPage() {
       <div className="glass-card rounded-2xl p-8 animate-fade-in-up delay-300">
         <h2 className="text-xl font-bold text-slate-900 dark:text-slate-100 mb-6">原始數據預覽</h2>
         <div className="bg-slate-50 dark:bg-slate-950/50 rounded-xl p-6 max-h-96 overflow-y-auto border border-slate-200 dark:border-white/5 custom-scrollbar">
-          <pre className="text-sm text-slate-600 dark:text-slate-400 whitespace-pre-wrap font-mono leading-relaxed">
-            {preview}
-          </pre>
+          {previewLoading ? (
+            <p className="text-sm text-slate-500 dark:text-slate-400">正在載入預覽...</p>
+          ) : previewError ? (
+            <div role="status" className="space-y-2">
+              <p className="font-medium text-amber-700 dark:text-amber-300">預覽暫時無法載入</p>
+              <p className="text-sm text-slate-600 dark:text-slate-400">{previewError}</p>
+              <p className="text-xs text-slate-500 dark:text-slate-500">
+                文件資料仍保留在資料庫中，您可以稍後重試。
+              </p>
+            </div>
+          ) : (
+            <pre className="text-sm text-slate-600 dark:text-slate-400 whitespace-pre-wrap font-mono leading-relaxed">
+              {preview || '此文件沒有可顯示的文字預覽。'}
+            </pre>
+          )}
         </div>
       </div>
     </div>

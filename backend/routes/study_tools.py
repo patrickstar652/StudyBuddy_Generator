@@ -1,339 +1,342 @@
-"""
-學習工具路由
-處理測驗生成、閃卡生成、摘要生成等功能
-"""
+"""Quiz, flashcard, summary, search, and document Q&A routes."""
 
-import os
+from __future__ import annotations
+
 import uuid
-from flask import Blueprint, request, jsonify
+from datetime import datetime, timezone
+from typing import Any
 
+from flask import Blueprint, current_app, jsonify, request
+
+from config import get_database, is_database_configured
 from services import get_groq_service, get_rag_service
-from config import get_supabase
-
-study_tools_bp = Blueprint('study_tools', __name__)
-
-# 是否使用 Supabase
-USE_SUPABASE = os.getenv('SUPABASE_URL') and os.getenv('SUPABASE_KEY')
 
 
-@study_tools_bp.route('/quiz/<doc_id>', methods=['POST'])
-def generate_quiz(doc_id: str):
-    """
-    生成隨堂考
-    
-    Request body:
-    {
-        "num_questions": 5,  // 可選，默認 5
-        "question_type": "mixed"  // 可選: multiple_choice, short_answer, mixed
-    }
-    """
+study_tools_bp = Blueprint("study_tools", __name__)
+
+# Explicit no-DATABASE_URL fallback. Persistent mode never reads from these
+# stores, so a database outage cannot be disguised as an empty successful list.
+quizzes_store: dict[str, list[dict[str, Any]]] = {}
+flashcards_store: dict[str, list[dict[str, Any]]] = {}
+summaries_store: dict[str, list[dict[str, Any]]] = {}
+
+
+def _valid_document_id(document_id: str) -> bool:
     try:
-        rag_service = get_rag_service()
-        
-        if not rag_service.is_document_indexed(doc_id):
-            return jsonify({'error': 'Document not found or not indexed'}), 404
-        
-        # 獲取請求參數
-        data = request.get_json() or {}
-        num_questions = min(max(data.get('num_questions', 5), 1), 10)
-        question_type = data.get('question_type', 'mixed')
-        
-        if question_type not in ['multiple_choice', 'short_answer', 'mixed']:
-            question_type = 'mixed'
-        
-        # 獲取文件內容
-        content = rag_service.get_full_text(doc_id)
-        
-        # 生成測驗
-        groq_service = get_groq_service()
-        quiz = groq_service.generate_quiz(content, num_questions, question_type)
-        
-        # 存入 Supabase（如果已配置）
+        uuid.UUID(document_id)
+    except (ValueError, AttributeError):
+        return False
+    return True
+
+
+def _request_json() -> dict[str, Any]:
+    data = request.get_json(silent=True)
+    return data if isinstance(data, dict) else {}
+
+
+def _bounded_integer(
+    data: dict[str, Any],
+    key: str,
+    default: int,
+    minimum: int,
+    maximum: int,
+) -> int:
+    value = data.get(key, default)
+    if isinstance(value, bool):
+        raise ValueError(f"{key} must be an integer")
+    try:
+        parsed = int(value)
+    except (TypeError, ValueError) as error:
+        raise ValueError(f"{key} must be an integer") from error
+    return min(max(parsed, minimum), maximum)
+
+
+def _document_ready(document_id: str):
+    if not _valid_document_id(document_id):
+        return False, (jsonify({"error": "Invalid document ID"}), 400)
+    if not get_rag_service().is_document_indexed(document_id):
+        return False, (jsonify({"error": "Document not found or not indexed"}), 404)
+    return True, None
+
+
+def _created_at() -> str:
+    return datetime.now(timezone.utc).isoformat()
+
+
+@study_tools_bp.route("/quiz/<document_id>", methods=["POST"])
+def generate_quiz(document_id: str):
+    """Generate and optionally persist a quiz."""
+
+    try:
+        ready, error_response = _document_ready(document_id)
+        if not ready:
+            return error_response
+
+        data = _request_json()
+        try:
+            num_questions = _bounded_integer(data, "num_questions", 5, 1, 10)
+        except ValueError as error:
+            return jsonify({"error": str(error)}), 400
+        question_type = data.get("question_type", "mixed")
+        if question_type not in {"multiple_choice", "short_answer", "mixed"}:
+            return jsonify({"error": "Invalid question_type"}), 400
+
+        content = get_rag_service().get_full_text(document_id)
+        quiz = get_groq_service().generate_quiz(
+            content,
+            num_questions,
+            question_type,
+        )
+
         quiz_id = str(uuid.uuid4())
-        if USE_SUPABASE:
-            try:
-                supabase = get_supabase()
-                supabase.save_quiz({
-                    'id': quiz_id,
-                    'document_id': doc_id,
-                    'title': quiz.get('quiz_title', '自動生成測驗'),
-                    'questions': quiz.get('questions', []),
-                    'settings': {'num_questions': num_questions, 'question_type': question_type}
-                })
-            except Exception as e:
-                print(f"Failed to save quiz to Supabase: {e}")
-        
-        return jsonify({
-            'document_id': doc_id,
-            'quiz_id': quiz_id,
-            'quiz': quiz,
-            'saved_to_supabase': USE_SUPABASE
-        })
-        
-    except Exception as e:
-        import traceback
-        print(f"Quiz generation error: {str(e)}")
-        print(traceback.format_exc())
-        return jsonify({'error': str(e)}), 500
+        saved_to_database = False
+        if "error" not in quiz:
+            record = {
+                "id": quiz_id,
+                "document_id": document_id,
+                "title": quiz.get("quiz_title", "自動生成測驗"),
+                "questions": quiz.get("questions", []),
+                "settings": {
+                    "num_questions": num_questions,
+                    "question_type": question_type,
+                    "source_coverage": quiz["source_coverage"],
+                },
+                "created_at": _created_at(),
+            }
+            if is_database_configured():
+                get_database().save_quiz(record)
+                saved_to_database = True
+            else:
+                quizzes_store.setdefault(document_id, []).insert(0, record)
+
+        return jsonify(
+            {
+                "document_id": document_id,
+                "quiz_id": quiz_id,
+                "quiz": quiz,
+                "saved_to_database": saved_to_database,
+            }
+        )
+    except Exception:
+        current_app.logger.exception("Quiz generation failed for %s", document_id)
+        return jsonify({"error": "Quiz generation failed"}), 500
 
 
-@study_tools_bp.route('/flashcards/<doc_id>', methods=['POST'])
-def generate_flashcards(doc_id: str):
-    """
-    生成閃卡
-    
-    Request body:
-    {
-        "num_cards": 10  // 可選，默認 10
-    }
-    """
+@study_tools_bp.route("/flashcards/<document_id>", methods=["POST"])
+def generate_flashcards(document_id: str):
+    """Generate and optionally persist a flashcard deck."""
+
     try:
-        rag_service = get_rag_service()
-        
-        if not rag_service.is_document_indexed(doc_id):
-            return jsonify({'error': 'Document not found or not indexed'}), 404
-        
-        # 獲取請求參數
-        data = request.get_json() or {}
-        num_cards = min(max(data.get('num_cards', 10), 5), 20)
-        
-        # 獲取文件內容
-        content = rag_service.get_full_text(doc_id)
-        
-        # 生成閃卡
-        groq_service = get_groq_service()
-        flashcards = groq_service.generate_flashcards(content, num_cards)
-        
-        # 存入 Supabase（如果已配置）
+        ready, error_response = _document_ready(document_id)
+        if not ready:
+            return error_response
+
+        data = _request_json()
+        try:
+            num_cards = _bounded_integer(data, "num_cards", 10, 5, 20)
+        except ValueError as error:
+            return jsonify({"error": str(error)}), 400
+
+        content = get_rag_service().get_full_text(document_id)
+        flashcards = get_groq_service().generate_flashcards(content, num_cards)
+
         flashcard_id = str(uuid.uuid4())
-        if USE_SUPABASE:
-            try:
-                supabase = get_supabase()
-                supabase.save_flashcards({
-                    'id': flashcard_id,
-                    'document_id': doc_id,
-                    'deck_title': flashcards.get('deck_title', '自動生成閃卡'),
-                    'cards': flashcards.get('cards', [])
-                })
-            except Exception as e:
-                print(f"Failed to save flashcards to Supabase: {e}")
-        
-        return jsonify({
-            'document_id': doc_id,
-            'flashcard_id': flashcard_id,
-            'flashcards': flashcards,
-            'saved_to_supabase': USE_SUPABASE
-        })
-        
-    except Exception as e:
-        import traceback
-        print(f"Flashcards generation error: {str(e)}")
-        print(traceback.format_exc())
-        return jsonify({'error': str(e)}), 500
+        saved_to_database = False
+        if "error" not in flashcards:
+            record = {
+                "id": flashcard_id,
+                "document_id": document_id,
+                "deck_title": flashcards.get("deck_title", "自動生成閃卡"),
+                "cards": flashcards.get("cards", []),
+                "source_coverage": flashcards["source_coverage"],
+                "created_at": _created_at(),
+            }
+            if is_database_configured():
+                get_database().save_flashcards(record)
+                saved_to_database = True
+            else:
+                flashcards_store.setdefault(document_id, []).insert(0, record)
+
+        return jsonify(
+            {
+                "document_id": document_id,
+                "flashcard_id": flashcard_id,
+                "flashcards": flashcards,
+                "saved_to_database": saved_to_database,
+            }
+        )
+    except Exception:
+        current_app.logger.exception(
+            "Flashcard generation failed for %s",
+            document_id,
+        )
+        return jsonify({"error": "Flashcard generation failed"}), 500
 
 
-@study_tools_bp.route('/summary/<doc_id>', methods=['POST'])
-def generate_summary(doc_id: str):
-    """
-    生成 TL;DR 摘要
-    
-    Request body:
-    {
-        "num_points": 5  // 可選，默認 5
-    }
-    """
+@study_tools_bp.route("/summary/<document_id>", methods=["POST"])
+def generate_summary(document_id: str):
+    """Generate and optionally persist a TL;DR summary."""
+
     try:
-        rag_service = get_rag_service()
-        
-        if not rag_service.is_document_indexed(doc_id):
-            return jsonify({'error': 'Document not found or not indexed'}), 404
-        
-        # 獲取請求參數
-        data = request.get_json() or {}
-        num_points = min(max(data.get('num_points', 5), 3), 10)
-        
-        # 獲取文件內容
-        content = rag_service.get_full_text(doc_id)
-        
-        # 生成摘要
-        groq_service = get_groq_service()
-        summary = groq_service.generate_summary(content, num_points)
-        
-        # 存入 Supabase（如果已配置）
+        ready, error_response = _document_ready(document_id)
+        if not ready:
+            return error_response
+
+        data = _request_json()
+        try:
+            num_points = _bounded_integer(data, "num_points", 5, 3, 10)
+        except ValueError as error:
+            return jsonify({"error": str(error)}), 400
+
+        content = get_rag_service().get_full_text(document_id)
+        summary = get_groq_service().generate_summary(content, num_points)
+
         summary_id = str(uuid.uuid4())
-        if USE_SUPABASE:
-            try:
-                supabase = get_supabase()
-                supabase.client.table('summaries').insert({
-                    'id': summary_id,
-                    'document_id': doc_id,
-                    'document_title': summary.get('document_title', ''),
-                    'tldr': summary.get('tldr', ''),
-                    'key_points': summary.get('key_points', []),
-                    'keywords': summary.get('keywords', [])
-                }).execute()
-            except Exception as e:
-                print(f"Failed to save summary to Supabase: {e}")
-        
-        return jsonify({
-            'document_id': doc_id,
-            'summary_id': summary_id,
-            'summary': summary,
-            'saved_to_supabase': USE_SUPABASE
-        })
-        
-    except Exception as e:
-        import traceback
-        print(f"Summary generation error: {str(e)}")
-        print(traceback.format_exc())
-        return jsonify({'error': str(e)}), 500
+        saved_to_database = False
+        if "error" not in summary:
+            record = {
+                "id": summary_id,
+                "document_id": document_id,
+                "document_title": summary.get("document_title", ""),
+                "tldr": summary.get("tldr", ""),
+                "key_points": summary.get("key_points", []),
+                "keywords": summary.get("keywords", []),
+                "source_coverage": summary["source_coverage"],
+                "created_at": _created_at(),
+            }
+            if is_database_configured():
+                get_database().save_summary(record)
+                saved_to_database = True
+            else:
+                summaries_store.setdefault(document_id, []).insert(0, record)
+
+        return jsonify(
+            {
+                "document_id": document_id,
+                "summary_id": summary_id,
+                "summary": summary,
+                "saved_to_database": saved_to_database,
+            }
+        )
+    except Exception:
+        current_app.logger.exception("Summary generation failed for %s", document_id)
+        return jsonify({"error": "Summary generation failed"}), 500
 
 
-@study_tools_bp.route('/ask/<doc_id>', methods=['POST'])
-def ask_question(doc_id: str):
-    """
-    向文件提問（RAG 問答）
-    
-    Request body:
-    {
-        "question": "你的問題"
-    }
-    """
+@study_tools_bp.route("/ask/<document_id>", methods=["POST"])
+def ask_question(document_id: str):
+    """Answer a question using the document's most relevant chunks."""
+
     try:
-        rag_service = get_rag_service()
-        
-        if not rag_service.is_document_indexed(doc_id):
-            return jsonify({'error': 'Document not found or not indexed'}), 404
-        
-        # 獲取請求參數
-        data = request.get_json() or {}
-        question = data.get('question', '').strip()
-        
+        ready, error_response = _document_ready(document_id)
+        if not ready:
+            return error_response
+
+        question = str(_request_json().get("question", "")).strip()
         if not question:
-            return jsonify({'error': 'Question is required'}), 400
-        
-        # 獲取相關上下文
-        context = rag_service.get_context_for_query(doc_id, question)
-        
-        # 獲取相關區塊用於顯示來源
-        sources = rag_service.search(doc_id, question, top_k=3)
-        
-        # 生成回答
-        groq_service = get_groq_service()
-        answer = groq_service.answer_question(question, context)
-        
-        return jsonify({
-            'document_id': doc_id,
-            'question': question,
-            'answer': answer,
-            'sources': sources
-        })
-        
-    except Exception as e:
-        return jsonify({'error': str(e)}), 500
+            return jsonify({"error": "Question is required"}), 400
+        if len(question) > 4000:
+            return jsonify({"error": "Question is too long"}), 400
 
-
-@study_tools_bp.route('/search/<doc_id>', methods=['POST'])
-def search_document(doc_id: str):
-    """
-    在文件中搜索
-    
-    Request body:
-    {
-        "query": "搜索關鍵字",
-        "top_k": 5  // 可選
-    }
-    """
-    try:
         rag_service = get_rag_service()
-        
-        if not rag_service.is_document_indexed(doc_id):
-            return jsonify({'error': 'Document not found or not indexed'}), 404
-        
-        # 獲取請求參數
-        data = request.get_json() or {}
-        query = data.get('query', '').strip()
-        top_k = min(max(data.get('top_k', 5), 1), 20)
-        
+        context = rag_service.get_context_for_query(document_id, question)
+        sources = rag_service.search(document_id, question, top_k=3)
+        answer = get_groq_service().answer_question(question, context)
+
+        return jsonify(
+            {
+                "document_id": document_id,
+                "question": question,
+                "answer": answer,
+                "sources": sources,
+            }
+        )
+    except Exception:
+        current_app.logger.exception("Document Q&A failed for %s", document_id)
+        return jsonify({"error": "Question answering failed"}), 500
+
+
+@study_tools_bp.route("/search/<document_id>", methods=["POST"])
+def search_document(document_id: str):
+    """Return semantically similar document chunks."""
+
+    try:
+        ready, error_response = _document_ready(document_id)
+        if not ready:
+            return error_response
+
+        data = _request_json()
+        query = str(data.get("query", "")).strip()
         if not query:
-            return jsonify({'error': 'Query is required'}), 400
-        
-        # 搜索
-        results = rag_service.search(doc_id, query, top_k)
-        
-        return jsonify({
-            'document_id': doc_id,
-            'query': query,
-            'results': results
-        })
-        
-    except Exception as e:
-        return jsonify({'error': str(e)}), 500
+            return jsonify({"error": "Query is required"}), 400
+        if len(query) > 4000:
+            return jsonify({"error": "Query is too long"}), 400
+        try:
+            top_k = _bounded_integer(data, "top_k", 5, 1, 20)
+        except ValueError as error:
+            return jsonify({"error": str(error)}), 400
+
+        results = get_rag_service().search(document_id, query, top_k)
+        return jsonify(
+            {
+                "document_id": document_id,
+                "query": query,
+                "results": results,
+            }
+        )
+    except Exception:
+        current_app.logger.exception("Document search failed for %s", document_id)
+        return jsonify({"error": "Document search failed"}), 500
 
 
-# ============ 歷史記錄 API ============
+@study_tools_bp.route("/flashcards/<document_id>", methods=["GET"])
+def get_flashcards_history(document_id: str):
+    return _history_response(
+        document_id,
+        "flashcards",
+        flashcards_store,
+        lambda: get_database().get_flashcards(document_id),
+    )
 
-@study_tools_bp.route('/flashcards/<doc_id>', methods=['GET'])
-def get_flashcards_history(doc_id: str):
-    """
-    獲取文件的閃卡歷史記錄
-    """
+
+@study_tools_bp.route("/quizzes/<document_id>", methods=["GET"])
+def get_quizzes_history(document_id: str):
+    return _history_response(
+        document_id,
+        "quizzes",
+        quizzes_store,
+        lambda: get_database().get_quizzes(document_id),
+    )
+
+
+@study_tools_bp.route("/summaries/<document_id>", methods=["GET"])
+def get_summaries_history(document_id: str):
+    return _history_response(
+        document_id,
+        "summaries",
+        summaries_store,
+        lambda: get_database().get_summaries(document_id),
+    )
+
+
+def _history_response(
+    document_id: str,
+    response_key: str,
+    fallback_store: dict[str, list[dict[str, Any]]],
+    database_loader,
+):
+    if not _valid_document_id(document_id):
+        return jsonify({"error": "Invalid document ID"}), 400
     try:
-        if not USE_SUPABASE:
-            return jsonify({'flashcards': [], 'message': 'Supabase not configured'}), 200
-        
-        supabase = get_supabase()
-        result = supabase.get_flashcards(doc_id)
-        
-        return jsonify({
-            'document_id': doc_id,
-            'flashcards': result.data if result.data else []
-        })
-        
-    except Exception as e:
-        print(f"Failed to get flashcards history: {e}")
-        return jsonify({'error': str(e)}), 500
-
-
-@study_tools_bp.route('/quizzes/<doc_id>', methods=['GET'])
-def get_quizzes_history(doc_id: str):
-    """
-    獲取文件的測驗歷史記錄
-    """
-    try:
-        if not USE_SUPABASE:
-            return jsonify({'quizzes': [], 'message': 'Supabase not configured'}), 200
-        
-        supabase = get_supabase()
-        result = supabase.get_quizzes(doc_id)
-        
-        return jsonify({
-            'document_id': doc_id,
-            'quizzes': result.data if result.data else []
-        })
-        
-    except Exception as e:
-        print(f"Failed to get quizzes history: {e}")
-        return jsonify({'error': str(e)}), 500
-
-
-@study_tools_bp.route('/summaries/<doc_id>', methods=['GET'])
-def get_summaries_history(doc_id: str):
-    """
-    獲取文件的摘要歷史記錄
-    """
-    try:
-        if not USE_SUPABASE:
-            return jsonify({'summaries': [], 'message': 'Supabase not configured'}), 200
-        
-        supabase = get_supabase()
-        result = supabase.client.table('summaries').select('*').eq('document_id', doc_id).order('created_at', desc=True).execute()
-        
-        return jsonify({
-            'document_id': doc_id,
-            'summaries': result.data if result.data else []
-        })
-        
-    except Exception as e:
-        print(f"Failed to get summaries history: {e}")
-        return jsonify({'error': str(e)}), 500
+        if is_database_configured():
+            history = database_loader()
+        else:
+            history = fallback_store.get(document_id, [])
+        return jsonify({"document_id": document_id, response_key: history})
+    except Exception:
+        current_app.logger.exception(
+            "Failed to retrieve %s history for %s",
+            response_key,
+            document_id,
+        )
+        return jsonify({"error": f"Failed to retrieve {response_key} history"}), 500

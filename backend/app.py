@@ -7,9 +7,12 @@ from flask import Flask
 from flask_cors import CORS
 from dotenv import load_dotenv
 import os
+from pathlib import Path
 
-# Load environment variables
-load_dotenv()
+BACKEND_DIR = Path(__file__).resolve().parent
+
+# Always load the backend-local environment file, regardless of the process cwd.
+load_dotenv(BACKEND_DIR / '.env')
 
 def create_app():
     app = Flask(__name__)
@@ -25,7 +28,7 @@ def create_app():
     
     # Configuration
     app.config['MAX_CONTENT_LENGTH'] = 50 * 1024 * 1024  # 50MB max file size
-    app.config['UPLOAD_FOLDER'] = os.path.join(os.path.dirname(__file__), 'uploads')
+    app.config['UPLOAD_FOLDER'] = str(BACKEND_DIR / 'uploads')
     
     # Ensure upload folder exists
     os.makedirs(app.config['UPLOAD_FOLDER'], exist_ok=True)
@@ -39,10 +42,27 @@ def create_app():
     
     @app.route('/api/health')
     def health_check():
-        return {'status': 'healthy', 'message': 'Study Buddy API is running!'}
+        from config import get_database, is_database_configured
+
+        if is_database_configured():
+            try:
+                get_database().ping()
+            except Exception:
+                app.logger.exception("Database health check failed")
+                return {
+                    'status': 'unhealthy',
+                    'message': 'Study Buddy API cannot reach its database',
+                    'database': 'unavailable',
+                }, 503
+        return {
+            'status': 'healthy',
+            'message': 'Study Buddy API is running!',
+            'database': 'connected' if is_database_configured() else 'memory',
+        }
     
     return app
 
 if __name__ == '__main__':
     app = create_app()
-    app.run(debug=True, port=5001)
+    debug_enabled = os.getenv('FLASK_DEBUG', '').lower() in {'1', 'true', 'yes'}
+    app.run(debug=debug_enabled, port=int(os.getenv('PORT', '5001')))

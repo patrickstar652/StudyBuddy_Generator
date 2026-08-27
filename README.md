@@ -1,317 +1,249 @@
-# Study Buddy - AI 學習夥伴 🎓
+# Study Buddy Generator
 
-一個強大的 AI 學習助手，幫助學生主動學習！上傳你的學習材料，**自動切片並建立向量索引**，然後生成測驗、閃卡和摘要。
+Study Buddy 是一個以 React、Flask、Groq 與 Neon Postgres 組成的 AI 學習工具。上傳 PDF、DOCX 或 TXT 後，系統會擷取文字、切分內容、建立向量嵌入，並提供文件預覽、語意搜尋、問答、測驗、閃卡與摘要。
 
-## ✨ 功能特色
+## 技術架構
 
-### 📤 智慧文件處理
-- **自動切片**: 上傳後自動將文件切分成最佳大小的區塊 (1000 tokens/區塊)
-- **向量嵌入**: 使用 Sentence Transformers 生成 384 維向量
-- **語義搜索**: FAISS 向量索引實現毫秒級搜索
-- **支援格式**: PDF、DOCX、TXT
+- 前端：React 18、Vite、Tailwind CSS
+- 後端：Flask、Python
+- AI：Groq Chat Completions
+- 嵌入：Sentence Transformers
+- 向量快取：FAISS
+- 持久化：Neon Postgres + pgvector
+- 文件解析：pypdf、python-docx、tiktoken
 
-### 🎯 生成隨堂考
-- AI 自動根據文件內容生成 5-10 道測驗題目
-- 支援選擇題和簡答題
-- 詳細的答案解釋和評分
+## 先備需求
 
-### 📚 生成閃卡
-- 自動提取關鍵術語和定義
-- 漂亮的翻轉動畫效果
-- 支援鍵盤快捷鍵操作
-- 可打亂順序複習
+- Git
+- Python 3.11 或 3.12
+- Node.js 20 以上與 npm
+- 一個 [Neon](https://neon.com/) 專案
+- 一組 [Groq API key](https://console.groq.com/keys)
+- `psql`，或可使用 Neon Console 的 SQL Editor
 
-### 📝 畫重點 TL;DR
-- 為長篇文件生成核心摘要
-- 按重要性標記要點
-- 提取關鍵詞標籤
+## 快速開始
 
-### 💬 智慧問答 (RAG)
-- 基於文件內容回答問題
-- 使用向量搜索找到最相關的內容
-- 顯示答案來源引用
-
-## 🛠️ 技術架構
-
-- **前端**: React + Vite + TailwindCSS
-- **後端**: Flask + Python
-- **AI/LLM**: Groq (Llama 3.1 70B)
-- **向量搜索**: FAISS + Sentence Transformers (all-MiniLM-L6-v2)
-- **文件處理**: PyPDF2, python-docx, tiktoken
-- **資料庫**: Supabase (PostgreSQL + pgvector)
-
-## 📤 文件上傳與切片流程
-
-系統會自動執行完整的處理流程：
-
-```
-1. 上傳文件 (PDF/DOCX/TXT)
-      ↓
-2. 提取純文字內容
-      ↓
-3. 智慧切片 (1000 tokens/區塊，200 tokens 重疊)
-      ↓
-4. 生成向量嵌入 (384 維)
-      ↓
-5. 建立 FAISS 搜索索引
-      ↓
-6. 保存到 Supabase (可選)
-      ↓
-7. 準備就緒！可使用所有學習工具
-```
-
-**為什麼要切片？**
-- ✅ 克服 LLM token 限制
-- ✅ 提高語義搜索精度
-- ✅ 降低 API 成本
-- ✅ 加快處理速度
-
-## 📦 安裝步驟
-
-### 手動安裝
-
-#### 1. 克隆專案
+### 1. Clone repository
 
 ```bash
-git clone <your-repo-url>
-cd study_buddy
+git clone https://github.com/patrickstar652/StudyBuddy_Generator.git
+cd StudyBuddy_Generator
 ```
 
-### 2. 設定後端
+### 2. 建立 Neon schema
+
+在 Neon Console 的 **Connect** 視窗取得兩種連線字串：
+
+- Pooled connection：主機名稱包含 `-pooler`，供 Flask 執行期間使用。
+- Direct connection：主機名稱不含 `-pooler`，供 schema migration 使用。
+
+應用程式的 `DATABASE_URL` 應使用 pooled connection。`database/schema.sql` 包含 pgvector extension 與所需資料表；migration 建議使用 direct connection，因為它涉及 session-dependent 的 schema 操作。
+
+PowerShell：
+
+```powershell
+$env:DIRECT_DATABASE_URL = "postgresql://YOUR_ROLE:YOUR_PASSWORD@YOUR_DIRECT_ENDPOINT/YOUR_DATABASE?sslmode=require"
+psql $env:DIRECT_DATABASE_URL -v ON_ERROR_STOP=1 -f database/schema.sql
+```
+
+macOS / Linux：
+
+```bash
+export DIRECT_DATABASE_URL='postgresql://YOUR_ROLE:YOUR_PASSWORD@YOUR_DIRECT_ENDPOINT/YOUR_DATABASE?sslmode=require'
+psql "$DIRECT_DATABASE_URL" -v ON_ERROR_STOP=1 -f database/schema.sql
+```
+
+也可以把 [database/schema.sql](database/schema.sql) 的內容貼到 Neon SQL Editor 執行。完成後應至少存在 `documents`、`document_embeddings`、`quizzes`、`flashcards`、`summaries` 五個資料表。
+
+### 3. 設定並安裝後端
+
+PowerShell：
+
+```powershell
+cd backend
+python -m venv .venv
+.\.venv\Scripts\Activate.ps1
+python -m pip install --upgrade pip
+python -m pip install -r requirements.txt
+Copy-Item .env.example .env
+```
+
+macOS / Linux：
 
 ```bash
 cd backend
-
-# 建立虛擬環境
-python -m venv venv
-
-# 啟動虛擬環境
-# Windows:
-venv\Scripts\activate
-# macOS/Linux:
-source venv/bin/activate
-
-# 安裝依賴
-pip install -r requirements.txt
-```
-
-### 3. 設定環境變數
-
-複製 `.env.example` 到 `.env` 並填入你的 API 金鑰：
-
-```bash
+python -m venv .venv
+source .venv/bin/activate
+python -m pip install --upgrade pip
+python -m pip install -r requirements.txt
 cp .env.example .env
 ```
 
-編輯 `.env` 文件：
+編輯 `backend/.env`，至少填入：
 
-```env
-# Gr快速啟動（推薦）
-
-使用自動化腳本一鍵啟動：
-
-```powershell
-# Windows PowerShell
-.\start.ps1
-```
-
-腳本會自動：
-- ✅ 檢查環境依賴
-- ✅ 創建虛擬環境
-- ✅ 安裝所有套件
-- ✅ 配置 API Key
-- ✅ 同時啟動前後端
-- ✅ 自動打開瀏覽器
-
-### 手動啟動
-
-#### oq API Configuration
+```dotenv
+DATABASE_URL=postgresql://YOUR_ROLE:YOUR_PASSWORD@YOUR_ENDPOINT-pooler.YOUR_REGION.aws.neon.tech/YOUR_DATABASE?sslmode=require
 GROQ_API_KEY=your_groq_api_key_here
-
-# Supabase Configuration (可選)
-SUPABASE_URL=your_supabase_project_url
-SUPABASE_KEY=your_supabase_anon_key
-
-# Model Configuration
-GROQ_MODEL=llama-3.1-70b-versatile
-EMBEDDING_MODEL=all-MiniLM-L6-v2
+GROQ_MODEL=openai/gpt-oss-120b
+EMBEDDING_MODEL=shibing624/text2vec-base-chinese
 ```
 
-### 4. 設定前端
+不要提交 `.env`。完整範例與註解請參考 [backend/.env.example](backend/.env.example)。
+
+### 4. 安裝前端
+
+在 repository 根目錄開另一個終端機：
 
 ```bash
 cd frontend
-
-# 安裝依賴
-npm install
+npm ci
 ```
 
-### 5. 設定 Supabase (可選)
+### 5. 啟動應用程式
 
-1. 前往 [Supabase](https://supabase.com) 創建專案
-2. 在 SQL Editor 中執行 `supabase/schema.sql`
-3. 複製 Project URL 和 anon key 到 `.env`
-
-> **注意**: 不配置 Supabase 也能使用！系統會使用內存存儲作為備用方案。
-
-### 6. 測試系統 🧪
-
-在啟動應用前，先測試文件處理功能：
-
-```bash
-cd backend
-python test_upload.py
-```
-
-這會測試：
-- ✅ 文字提取
-- ✅ 智慧切片
-- ✅ 向量嵌入
-- ✅ 搜索功能
-
-看到 "✅ 所有測試通過！" 表示系統正常。
-
-## 🚀 啟動應用
-
-### 啟動後端
+後端：
 
 ```bash
 cd backend
 python app.py
 ```
 
-後端將在 http://localhost:5000 運行
+Flask API 會在 `http://localhost:5001` 啟動。
 
-### 啟動前端
+前端：
 
 ```bash
 cd frontend
 npm run dev
 ```
 
-前端將在 http://localhost:3000 運行
+Vite 會在 `http://localhost:3000` 啟動，並將 `/api` proxy 到 Flask 的 `5001` port。
 
-## 📁 專案結構
+確認後端可連線：
 
-```
-study_buddy/
-├── backend/
-│   ├── app.py                 # Flask 應用入口
-│   ├── requirements.txt       # Python 依賴
-│   ├── .env.example          # 環境變數範例
-│   ├── config/
-│   │   └── supabase_client.py # Supabase 配置
-│   ├── services/
-│   │   ├── groq_service.py    # LLM 服務
-│   │   ├── document_processor.py # 文件處理
-│   │   └── rag_service.py     # RAG 向量搜索
-│   └── routes/
-│       ├── documents.py       # 文件 API
-│       └── study_tools.py     # 學習工具 API
-├── frontend/
-│   ├── package.json
-│   ├── vite.config.js
-│   ├── tailwind.config.js
-│   └── src/
-│       ├── App.jsx
-│       ├── main.jsx
-│       ├── index.css
-│       ├── services/
-│       │   └── api.js         # API 客戶端
-│       ├── components/
-│       │   ├── Layout.jsx
-│       │   ├── FileUpload.jsx
-│       │   ├── DocumentCard.jsx
-│       │   └── LoadingSpinner.jsx
-│       └── pages/
-│           ├── HomePage.jsx
-│           ├── DocumentPage.jsx
-│           ├── QuizPage.jsx
-│           ├── FlashcardsPage.jsx
-│           └── SummaryPage.jsx
-└── supabase/
-    └── schema.sql             # 資料庫架構
+```bash
+curl http://localhost:5001/api/health
 ```
 
-## 🔑 獲取 API 金鑰
-### 1. 上傳文件 📤
-- 在首頁拖放或選擇學習材料 (PDF、DOCX、TXT)
-- 系統自動處理：
-  - ✅ 提取文字 (支援 PDF、Word、純文字)
-  - ✅ 切片處理 (1000 tokens/區塊)
-  - ✅ 向量嵌入 (384 維語義向量)
-  - ✅ 建立搜索索引 (FAISS)
-  - ✅ 保存到資料庫 (可選)
-- 處理完成後自動跳轉到文件頁面
+第一次處理文件時，Sentence Transformers 可能需要下載嵌入模型，因此會比後續請求久。
 
-### 2. 選擇學習工具 🎯
-   - **生成隨堂考**: 測試理解程度，獲得即時反饋
-   - **生成閃卡**: 快速複習關鍵概念，支援翻卡動畫
-   - **畫重點**: 獲取文件核心摘要，節省閱讀時間
-   - **智慧問答**: 向文件提問，基於 RAG 技術回答
+## 環境變數
 
-### 3. 互動學習 💡
-- 所有功能都基於上傳時建立的向量索引
-- 回答來源可追溯到具體文件段落
-- 支援多文件管理和切換
+| 變數 | 必要 | 用途 |
+| --- | --- | --- |
+| `DATABASE_URL` | 建議 | Flask 使用的 Neon pooled connection。設定後會持久化文件資料、文字區塊、向量與生成歷史。 |
+| `DIRECT_DATABASE_URL` | 僅 migration | Neon direct connection。應只用於 `psql` 或 migration，不是 Flask 執行所需。 |
+| `GROQ_API_KEY` | 是 | Groq API 認證。 |
+| `GROQ_MODEL` | 是 | 預設為 `openai/gpt-oss-120b`；若更換，請先確認該 model 仍在 Groq supported models 清單中。 |
+| `EMBEDDING_MODEL` | 是 | Sentence Transformers model，預設為 `shibing624/text2vec-base-chinese`。 |
 
-### 📊 處理範例
+若變更 `EMBEDDING_MODEL`，既有文件應重新建立嵌入，避免用不同模型查詢舊向量。
 
-**上傳:** 機器學習導論.pdf (50 頁)
+## 資料持久化行為
 
-**自動處理結果:**
-```json
-{
-  "total_characters": 125000,
-  "total_tokens": 25000,
-  "total_chunks": 28,
-  "status": "ready",
-  "processing_details": {
-    "chunks_created": 28,
-    "embedding_model": "all-MiniLM-L6-v2",
-    "embedding_dimension": 384
-  }
-}
+設定 `DATABASE_URL` 後，系統會把下列資料存入 Neon：
+
+- 文件 metadata 與擷取後的完整文字
+- 文件切片與向量嵌入
+- 測驗、閃卡與摘要歷史
+
+FAISS 是程序內的查詢快取；後端重啟後會由 Neon 保存的切片與向量重新載入，而不是把 FAISS index 當成唯一資料來源。
+
+原始上傳檔案仍存放在 `backend/uploads/`，不會存進 Neon。部署在 ephemeral filesystem 時，原始檔可能在重啟或重新部署後消失，但已成功寫入 Neon 的擷取文字、向量與生成歷史仍可保留。若未設定 `DATABASE_URL`，只能視為暫時性的本機模式，程序重啟後資料可能遺失。
+
+## 支援格式與限制
+
+- PDF (`.pdf`)
+- Word Open XML (`.docx`)
+- 純文字 (`.txt`)
+- 單檔上限 50 MB
+
+舊版 Word `.doc` 不屬於目前可靠支援範圍，請先轉為 `.docx`。
+
+## 驗證與測試
+
+後端：
+
+```bash
+cd backend
+python -m pytest -q
 ```
 
-**可用功能:**
-- ✅ 生成 5-10 題測驗
-- ✅ 生成 10-20 張閃卡
-- ✅ 生成 5-10 點摘要
-- ✅ 無限次問
-### Supabase (可選)
-1. 前往 [Supabase](https://supabase.com)
-2. 創建新專案
-3. 在 Settings > API 中獲取 URL 和 anon key
+前端：
 
-## 📄 支援的文件格式
+```bash
+cd frontend
+npm ci
+npm test
+npm run lint
+npm run build
+npm audit
+```
 
-- PDF (.pdf)
-- Word 文件 (.docx, .doc)
-- 純文字 (.txt)
+建議的完整 smoke test：
 
-## 🎮 使用方式
+1. 上傳一份不含敏感資訊的小型 TXT。
+2. 確認預覽、搜尋與問答可用。
+3. 生成測驗、閃卡及摘要，確認歷史記錄可重新載入。
+4. 重新啟動 Flask，再次確認文件與所有功能仍可使用。
+5. 刪除文件，確認 Neon 中的切片與生成歷史一併被 cascade delete。
 
-1. **上傳文件**: 在首頁拖放或選擇學習材料
-2. **選擇工具**: 
-   - 點擊「生成隨堂考」測試理解程度
-   - 點擊「生成閃卡」快速複習關鍵概念
-   - 點擊「畫重點」獲取文件摘要
-3. **互動學習**: 向文件提問，獲得 AI 回答
+## API
 
-## 📝 API 端點
+### 文件
 
-### 文件管理
-- `POST /api/documents/upload` - 上傳文件
-- `GET /api/documents/` - 獲取所有文件
-- `GET /api/documents/:id` - 獲取單個文件
-- `DELETE /api/documents/:id` - 刪除文件
-- `GET /api/documents/:id/preview` - 預覽文件內容
+- `POST /api/documents/upload`
+- `GET /api/documents/`
+- `GET /api/documents/:id`
+- `GET /api/documents/:id/preview`
+- `DELETE /api/documents/:id`
 
 ### 學習工具
-- `POST /api/study/quiz/:docId` - 生成測驗
-- `POST /api/study/flashcards/:docId` - 生成閃卡
-- `POST /api/study/summary/:docId` - 生成摘要
-- `POST /api/study/ask/:docId` - 問答
-- `POST /api/study/search/:docId` - 搜索文件內容
 
+- `POST /api/study/search/:docId`
+- `POST /api/study/ask/:docId`
+- `POST /api/study/quiz/:docId`
+- `GET /api/study/quizzes/:docId`
+- `POST /api/study/flashcards/:docId`
+- `GET /api/study/flashcards/:docId`
+- `POST /api/study/summary/:docId`
+- `GET /api/study/summaries/:docId`
+
+## 安全注意事項
+
+- 目前應用程式沒有完整的使用者登入、租戶隔離與公開網路用 rate limiting，請勿直接公開部署。
+- 文件內容會送往 Groq 產生答案與學習材料；上傳前請確認你有權處理該內容。
+- 不要把 Neon connection string、Groq API key、`.env` 或使用者上傳檔案提交到 Git。
+- 若憑證曾進入 Git 歷史，僅刪除目前檔案並不足夠；必須先撤銷並輪替憑證，再清理歷史。
+
+憑證事故處理與 Git 歷史清理流程請見 [SECURITY.md](SECURITY.md)。
+
+## 專案結構
+
+```text
+StudyBuddy_Generator/
+├── backend/
+│   ├── app.py
+│   ├── .env.example
+│   ├── requirements.txt
+│   ├── config/
+│   │   └── database.py
+│   ├── routes/
+│   ├── services/
+│   └── tests/
+├── database/
+│   └── schema.sql
+├── frontend/
+│   ├── package.json
+│   └── src/
+├── README.md
+└── SECURITY.md
+```
+
+## 疑難排解
+
+- `DATABASE_URL` 連線失敗：確認使用 pooled endpoint、帳密未過期，且 URL 包含 `sslmode=require`。
+- Migration 失敗：改用不含 `-pooler` 的 direct connection，並加上 `psql -v ON_ERROR_STOP=1` 取得第一個錯誤。
+- 找不到資料表：重新執行 `database/schema.sql`，並確認連到正確的 Neon project、branch 與 database。
+- Groq 回報 model 不存在：查看 [Groq supported models](https://console.groq.com/docs/models)，更新 `GROQ_MODEL` 後重新啟動 Flask。
+- 第一次上傳很慢：通常是本機正在下載並初始化嵌入模型。

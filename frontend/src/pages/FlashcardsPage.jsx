@@ -1,11 +1,10 @@
-import { useState, useEffect } from 'react';
+import { useCallback, useEffect, useRef, useState } from 'react';
 import { useParams, Link } from 'react-router-dom';
 import {
   ArrowLeft,
   Layers,
   ChevronLeft,
   ChevronRight,
-  RotateCcw,
   Shuffle,
   Tag,
   Sparkles,
@@ -15,7 +14,16 @@ import {
 } from 'lucide-react';
 import toast from 'react-hot-toast';
 import LoadingSpinner, { LoadingButton } from '../components/LoadingSpinner';
-import { documentApi, studyApi } from '../services/api';
+import {
+  documentApi,
+  getApiErrorMessage,
+  isRequestCanceled,
+  studyApi,
+} from '../services/api';
+import {
+  normalizeFlashcardHistory,
+  normalizeFlashcards,
+} from '../utils/studyData';
 
 function FlashcardsPage() {
   const { docId } = useParams();
@@ -28,46 +36,87 @@ function FlashcardsPage() {
   const [isFlipped, setIsFlipped] = useState(false);
   const [numCards, setNumCards] = useState(10);
   const [showHistory, setShowHistory] = useState(false);
+  const requestSequenceRef = useRef(0);
+  const generationControllerRef = useRef(null);
 
-  useEffect(() => {
-    fetchDocument();
-    fetchHistory();
-  }, [docId]);
-
-  const fetchDocument = async () => {
+  const fetchDocument = useCallback(async (signal, requestId) => {
     try {
-      const data = await documentApi.get(docId);
+      const data = await documentApi.get(docId, { signal });
+      if (signal.aborted || requestSequenceRef.current !== requestId) return;
       setDocument(data.document);
     } catch (error) {
+      if (isRequestCanceled(error) || requestSequenceRef.current !== requestId) return;
       console.error('Failed to fetch document:', error);
-      toast.error('Failed to load document');
+      toast.error(getApiErrorMessage(error, '無法載入文件'));
     } finally {
-      setLoading(false);
+      if (!signal.aborted && requestSequenceRef.current === requestId) {
+        setLoading(false);
+      }
     }
-  };
+  }, [docId]);
 
-  const fetchHistory = async () => {
+  const fetchHistory = useCallback(async (
+    loadLatest = false,
+    signal,
+    requestId = requestSequenceRef.current,
+  ) => {
     try {
-      const data = await studyApi.getFlashcards(docId);
-      setHistory(data.flashcards || []);
-      // 如果有歷史記錄，自動載入最新的一筆
-      if (data.flashcards && data.flashcards.length > 0) {
-        const latest = data.flashcards[0];
-        setFlashcards({
+      const data = await studyApi.getFlashcards(docId, { signal });
+      if (signal?.aborted || requestSequenceRef.current !== requestId) return;
+
+      const normalizedHistory = normalizeFlashcardHistory(data?.flashcards);
+      setHistory(normalizedHistory);
+      if (loadLatest && normalizedHistory.length > 0) {
+        const latest = normalizedHistory[0];
+        setFlashcards((current) => current ?? {
           deck_title: latest.deck_title,
           cards: latest.cards,
         });
       }
     } catch (error) {
+      if (isRequestCanceled(error) || requestSequenceRef.current !== requestId) return;
       console.error('Failed to fetch flashcards history:', error);
     }
-  };
+  }, [docId]);
+
+  useEffect(() => {
+    const requestId = ++requestSequenceRef.current;
+    const controller = new AbortController();
+
+    generationControllerRef.current?.abort();
+    generationControllerRef.current = null;
+    setDocument(null);
+    setFlashcards(null);
+    setHistory([]);
+    setLoading(true);
+    setGenerating(false);
+    setCurrentCard(0);
+    setIsFlipped(false);
+    setNumCards(10);
+    setShowHistory(false);
+
+    fetchDocument(controller.signal, requestId);
+    fetchHistory(true, controller.signal, requestId);
+
+    return () => {
+      controller.abort();
+      generationControllerRef.current?.abort();
+      generationControllerRef.current = null;
+      requestSequenceRef.current = requestId + 1;
+    };
+  }, [fetchDocument, fetchHistory]);
 
   const loadFromHistory = (item) => {
-    setFlashcards({
+    const normalizedDeck = normalizeFlashcards({
       deck_title: item.deck_title,
       cards: item.cards,
     });
+    if (!normalizedDeck) {
+      toast.error('這筆歷史閃卡資料已損毀，無法載入');
+      return;
+    }
+
+    setFlashcards(normalizedDeck);
     setCurrentCard(0);
     setIsFlipped(false);
     setShowHistory(false);
@@ -75,34 +124,59 @@ function FlashcardsPage() {
   };
 
   const generateFlashcards = async () => {
+    generationControllerRef.current?.abort();
+    const controller = new AbortController();
+    const requestId = requestSequenceRef.current;
+    generationControllerRef.current = controller;
     setGenerating(true);
     setFlashcards(null);
     setCurrentCard(0);
     setIsFlipped(false);
     try {
-      const result = await studyApi.generateFlashcards(docId, { num_cards: numCards });
-      if (result.flashcards.error) {
+      const result = await studyApi.generateFlashcards(
+        docId,
+        { num_cards: numCards },
+        { signal: controller.signal },
+      );
+      if (controller.signal.aborted || requestSequenceRef.current !== requestId) return;
+
+      if (result?.flashcards?.error) {
         toast.error(result.flashcards.error);
       } else {
-        setFlashcards(result.flashcards);
+        const normalizedDeck = normalizeFlashcards(result?.flashcards);
+        if (!normalizedDeck) {
+          toast.error('伺服器回傳了無效的閃卡資料');
+          return;
+        }
+
+        setFlashcards(normalizedDeck);
         toast.success('Flashcards generated successfully');
-        // 重新載入歷史
-        fetchHistory();
+        await fetchHistory(false, controller.signal, requestId);
       }
     } catch (error) {
+      if (isRequestCanceled(error) || requestSequenceRef.current !== requestId) return;
       console.error('Failed to generate flashcards:', error);
-      toast.error('Flashcard generation failed');
+      toast.error(getApiErrorMessage(error, '閃卡生成失敗'));
     } finally {
-      setGenerating(false);
+      if (
+        !controller.signal.aborted
+        && requestSequenceRef.current === requestId
+        && generationControllerRef.current === controller
+      ) {
+        generationControllerRef.current = null;
+        setGenerating(false);
+      }
     }
   };
 
   const handlePrev = () => {
+    if (!flashcards?.cards?.length) return;
     setIsFlipped(false);
     setCurrentCard((prev) => (prev > 0 ? prev - 1 : flashcards.cards.length - 1));
   };
 
   const handleNext = () => {
+    if (!flashcards?.cards?.length) return;
     setIsFlipped(false);
     setCurrentCard((prev) => (prev < flashcards.cards.length - 1 ? prev + 1 : 0));
   };
@@ -116,23 +190,40 @@ function FlashcardsPage() {
     toast.success('Deck shuffled');
   };
 
-  const handleKeyPress = (e) => {
-    if (e.key === ' ' || e.key === 'Enter') {
-      setIsFlipped(!isFlipped);
-    } else if (e.key === 'ArrowLeft') {
-      handlePrev();
-    } else if (e.key === 'ArrowRight') {
-      handleNext();
-    }
-  };
+  const cardCount = flashcards?.cards?.length || 0;
 
   useEffect(() => {
+    if (cardCount === 0) return undefined;
+
+    const handleKeyPress = (event) => {
+      const target = event.target;
+      const isInteractiveTarget = target instanceof HTMLElement && (
+        target.isContentEditable
+        || ['INPUT', 'TEXTAREA', 'SELECT', 'BUTTON', 'A'].includes(target.tagName)
+      );
+
+      if (isInteractiveTarget) return;
+
+      if (event.key === ' ' || event.key === 'Enter') {
+        event.preventDefault();
+        setIsFlipped((current) => !current);
+      } else if (event.key === 'ArrowLeft') {
+        setIsFlipped(false);
+        setCurrentCard((current) => (current > 0 ? current - 1 : cardCount - 1));
+      } else if (event.key === 'ArrowRight') {
+        setIsFlipped(false);
+        setCurrentCard((current) => (current < cardCount - 1 ? current + 1 : 0));
+      }
+    };
+
     window.addEventListener('keydown', handleKeyPress);
     return () => window.removeEventListener('keydown', handleKeyPress);
-  }, [isFlipped, flashcards, currentCard]);
+  }, [cardCount]);
 
   const formatDate = (dateString) => {
+    if (!dateString) return '時間未知';
     const date = new Date(dateString);
+    if (Number.isNaN(date.getTime())) return '時間未知';
     return date.toLocaleDateString('zh-TW', {
       year: 'numeric',
       month: 'short',
@@ -144,6 +235,17 @@ function FlashcardsPage() {
 
   if (loading) {
     return <LoadingSpinner message="正在加載神經牌組..." />;
+  }
+
+  if (!document) {
+    return (
+      <div className="text-center py-24 glass-card rounded-3xl animate-scale-in">
+        <p className="text-slate-500 dark:text-slate-400 text-lg">找不到文件或文件暫時無法載入</p>
+        <Link to="/" className="text-purple-600 dark:text-purple-400 hover:underline mt-4 inline-block font-medium">
+          返回首頁
+        </Link>
+      </div>
+    );
   }
 
   const card = flashcards?.cards?.[currentCard];
@@ -217,7 +319,7 @@ function FlashcardsPage() {
       )}
 
       {/* Generate Section - 顯示在有歷史記錄時變成「生成新閃卡」按鈕 */}
-      {!flashcards && !generating && (
+      {!flashcards && (
         <div className="glass-card rounded-2xl p-12 text-center border-dashed border-2 border-slate-300 dark:border-slate-700 animate-scale-in">
           <div className="bg-purple-100 dark:bg-purple-500/10 w-20 h-20 rounded-full flex items-center justify-center mx-auto mb-6 animate-float">
             <Sparkles className="h-10 w-10 text-purple-600 dark:text-purple-400" />
@@ -233,6 +335,7 @@ function FlashcardsPage() {
             <select
               value={numCards}
               onChange={(e) => setNumCards(parseInt(e.target.value))}
+              disabled={generating}
               className="px-4 py-2 bg-white dark:bg-slate-900 border border-slate-300 dark:border-slate-600 rounded-lg focus:outline-none focus:ring-2 focus:ring-purple-500 text-slate-900 dark:text-slate-200"
             >
               {[5, 10, 15, 20].map((n) => (
@@ -283,11 +386,12 @@ function FlashcardsPage() {
 
           {/* Card */}
           <div key={currentCard} className="flashcard-container max-w-2xl mx-auto h-[400px] animate-slide-in-right">
-            <div
+            <button
+              type="button"
               onClick={() => setIsFlipped(!isFlipped)}
-              className={`flashcard cursor-pointer w-full h-full relative ${isFlipped ? 'flipped' : ''}`}
+              aria-label={isFlipped ? '顯示閃卡正面' : '顯示閃卡答案'}
+              className={`flashcard cursor-pointer w-full h-full relative focus:outline-none focus-visible:ring-4 focus-visible:ring-purple-400/60 rounded-3xl ${isFlipped ? 'flipped' : ''}`}
             >
-              {/* Front */}
               {/* Front */}
               <div className="flashcard-front holo-card flashcard-3d-glow absolute inset-0 bg-gradient-to-br from-white to-slate-50 dark:from-slate-900 dark:to-slate-900 rounded-3xl p-8 flex flex-col items-center border-t border-l border-slate-200 dark:border-white/10 shadow-[0_20px_50px_rgba(0,0,0,0.1)] dark:shadow-[0_20px_50px_rgba(0,0,0,0.5)] transition-colors overflow-hidden">
                 <div className="flex-1 flex flex-col items-center justify-center w-full z-10">
@@ -295,7 +399,7 @@ function FlashcardsPage() {
                     {card.front}
                   </h3>
                   {card.category && (
-                    <span className="inline-flex items-center gap-2 px-4 py-1.5 bg-purple-100 dark:bg-purple-500/10 border border-purple-200 dark:border-purple-500/20 rounded-full text-sm text-purple-700 dark:text-purple-300 uppercase tracking-widest box-shadow-neon">
+                    <span className="inline-flex items-center gap-2 px-4 py-1.5 bg-purple-100 dark:bg-purple-500/10 border border-purple-200 dark:border-purple-500/20 rounded-full text-sm text-purple-700 dark:text-purple-300 uppercase tracking-widest">
                       <Tag className="h-3 w-3" />
                       {card.category}
                     </span>
@@ -326,7 +430,7 @@ function FlashcardsPage() {
                   </div>
                 </div>
               </div>
-            </div>
+            </button>
           </div>
 
           {/* Navigation */}
